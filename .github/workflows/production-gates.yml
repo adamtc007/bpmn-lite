@@ -44,6 +44,8 @@ jobs:
         run: bash scripts/check-q9-capture-gate.sh --self-test
       - name: Q9 capture-gate guard
         run: bash scripts/check-q9-capture-gate.sh
+      - name: Domain-noun gate (bpmn-lite-types, BL-T2)
+        run: bash scripts/check-domain-nouns.sh
       - name: Install public API boundary checker
         run: cargo install cargo-public-api --version 0.52.0 --locked
       - name: Semantic Gameboard API and dependency boundary

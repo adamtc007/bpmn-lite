@@ -282,6 +282,65 @@ async fn start_with_malformed_payload_fails_closed_at_admission() {
         .expect("valid non-object JSON payload must be admitted");
 }
 
+/// BL-T2 (EOP-PLAN-CA-REUSE-001): the workspace kind is opaque and
+/// caller-supplied — an external crate that has never heard of any host
+/// system's workspace vocabulary can start an instance with an arbitrary
+/// taxonomy value (this one was in no prior closed list), run it to
+/// completion, and read the value back verbatim.
+#[tokio::test]
+async fn test_start_with_arbitrary_workspace_kind_runs_to_completion() {
+    use bpmn_lite_types::session_stack::WorkspaceKind;
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let bpmn = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                          xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+          <bpmn:process id="opaque_ws_proc" isExecutable="true">
+            <bpmn:startEvent id="start" />
+            <bpmn:endEvent id="end" />
+            <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="end" />
+          </bpmn:process>
+        </bpmn:definitions>"#;
+    let compile_result = engine.compile(bpmn).await.unwrap();
+    let payload = r#"{"case":"opaque"}"#;
+    let hash = bpmn_lite_types::EffectId::content_hash(payload.as_bytes());
+
+    let kind = WorkspaceKind::new("orbital-survey.turn:v2").unwrap();
+    let instance_id = engine
+        .start_with_params(StartParams {
+            process_key: "opaque_ws_proc".to_string(),
+            bytecode_version: compile_result.bytecode_version,
+            domain_payload: payload.to_string(),
+            domain_payload_hash: hash,
+            correlation_id: "corr-opaque-ws".to_string(),
+            session_stack: SessionStackState {
+                session_id: Uuid::new_v4(),
+                scope: None,
+                active_workspace: Some(kind.clone()),
+                workspace_stack: Vec::new(),
+                trace_sequence: 0,
+            },
+            entry_id: Uuid::new_v4(),
+            runbook_id: Uuid::new_v4(),
+            expected_preconditions: None,
+        })
+        .await
+        .unwrap();
+    engine.run_instance(instance_id).await.unwrap();
+
+    let loaded = store
+        .load_instance(
+            &bpmn_lite_types::TenantId::new("default").unwrap(),
+            instance_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(loaded.state, ProcessState::Completed { .. }));
+    assert_eq!(loaded.session_stack.active_workspace, Some(kind));
+}
+
 #[tokio::test]
 async fn test_start_with_session_stack_copies_value() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
@@ -309,7 +368,7 @@ async fn test_start_with_session_stack_copies_value() {
             client_group_id: original_scope_id,
             client_group_name: Some("Original".to_string()),
         }),
-        active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc),
+        active_workspace: Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-a").unwrap()),
         workspace_stack: Vec::new(),
         trace_sequence: 5,
     };
@@ -334,7 +393,7 @@ async fn test_start_with_session_stack_copies_value() {
         client_group_name: Some("Mutated".to_string()),
     });
     session_stack.active_workspace =
-        Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
+        Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-b").unwrap());
     session_stack.trace_sequence = 77;
 
     let loaded = store
@@ -355,7 +414,7 @@ async fn test_start_with_session_stack_copies_value() {
     );
     assert_eq!(
         loaded.session_stack.active_workspace,
-        Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc)
+        Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-a").unwrap())
     );
     assert_eq!(loaded.session_stack.trace_sequence, 5);
 }

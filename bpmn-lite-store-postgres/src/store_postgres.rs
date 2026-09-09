@@ -5491,7 +5491,7 @@ mod tests {
                 client_group_id: original_scope_id,
                 client_group_name: Some("Original".to_string()),
             }),
-            active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc),
+            active_workspace: Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-a").unwrap()),
             workspace_stack: Vec::new(),
             trace_sequence: 17,
         };
@@ -5503,7 +5503,7 @@ mod tests {
             client_group_name: Some("Mutated".to_string()),
         });
         inst.session_stack.active_workspace =
-            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
+            Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-b").unwrap());
         inst.session_stack.trace_sequence = 99;
 
         let loaded = store
@@ -5521,7 +5521,7 @@ mod tests {
         );
         assert_eq!(
             loaded.session_stack.active_workspace,
-            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc)
+            Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-a").unwrap())
         );
         assert_eq!(loaded.session_stack.trace_sequence, 17);
     }

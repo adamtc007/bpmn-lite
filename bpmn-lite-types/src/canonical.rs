@@ -157,6 +157,16 @@ pub enum CanonicalDecodeError {
     InvalidUtf8,
     #[error("canonical decode: unknown enum tag {tag} for {type_name}")]
     UnknownTag { tag: u8, type_name: &'static str },
+    /// BL-T2 cut-over: a tag from a retired wire generation. Pre-cutover
+    /// state was drained/wiped; encountering the old tag is a typed
+    /// rejection, never a silent default.
+    #[error("canonical decode: tag {tag} for {type_name} is from a retired wire generation (pre-cutover state is not decodable)")]
+    UnsupportedWireVersion { tag: u8, type_name: &'static str },
+    #[error("canonical decode: invalid field value for {type_name}: {message}")]
+    InvalidValue {
+        type_name: &'static str,
+        message: String,
+    },
     #[error("canonical decode: {0} trailing bytes after decode")]
     TrailingBytes(usize),
     #[error("canonical decode: Value::Array nesting depth exceeds {max}")]
@@ -908,43 +918,33 @@ impl CanonicalEncode for crate::types::Fiber {
     }
 }
 
-/// Tags 0x00-0x0A in declaration order.
-impl CanonicalEncode for crate::session_stack::SessionWorkspaceKind {
+/// Tag 0x0B + validated string. Tags 0x00-0x0A belonged to the retired
+/// closed workspace enum (BL-T2 cut-over); decoding one is a typed
+/// `UnsupportedWireVersion` rejection — pre-cutover state was wiped, so
+/// the old tags must never resolve to a value.
+impl CanonicalEncode for crate::session_stack::WorkspaceKind {
     fn canonical_encode(&self, w: &mut CanonicalWriter) {
-        w.write_u8(match self {
-            Self::ProductMaintenance => 0x00,
-            Self::Catalogue => 0x01,
-            Self::Deal => 0x02,
-            Self::Cbu => 0x03,
-            Self::Kyc => 0x04,
-            Self::InstrumentMatrix => 0x05,
-            Self::OnBoarding => 0x06,
-            Self::SemOsMaintenance => 0x07,
-            Self::LifecycleResources => 0x08,
-            Self::BookingPrincipal => 0x09,
-            Self::Bpmn => 0x0A,
-        });
+        w.write_u8(0x0B);
+        w.write_str(self.as_str());
     }
     fn canonical_decode(r: &mut CanonicalReader) -> Result<Self, CanonicalDecodeError> {
-        Ok(match r.read_u8()? {
-            0x00 => Self::ProductMaintenance,
-            0x01 => Self::Catalogue,
-            0x02 => Self::Deal,
-            0x03 => Self::Cbu,
-            0x04 => Self::Kyc,
-            0x05 => Self::InstrumentMatrix,
-            0x06 => Self::OnBoarding,
-            0x07 => Self::SemOsMaintenance,
-            0x08 => Self::LifecycleResources,
-            0x09 => Self::BookingPrincipal,
-            0x0A => Self::Bpmn,
-            tag => {
-                return Err(CanonicalDecodeError::UnknownTag {
-                    tag,
-                    type_name: "SessionWorkspaceKind",
+        match r.read_u8()? {
+            0x0B => {
+                let value = r.read_str()?;
+                Self::new(value).map_err(|error| CanonicalDecodeError::InvalidValue {
+                    type_name: "WorkspaceKind",
+                    message: error.to_string(),
                 })
             }
-        })
+            tag @ 0x00..=0x0A => Err(CanonicalDecodeError::UnsupportedWireVersion {
+                tag,
+                type_name: "WorkspaceKind",
+            }),
+            tag => Err(CanonicalDecodeError::UnknownTag {
+                tag,
+                type_name: "WorkspaceKind",
+            }),
+        }
     }
 }
 
@@ -1666,7 +1666,7 @@ mod tests {
 
     #[test]
     fn golden_bytes_populated_session_types() {
-        use crate::session_stack::{SessionScopeState, SessionWorkspaceKind};
+        use crate::session_stack::{SessionScopeState, WorkspaceKind};
         assert_eq!(
             SessionScopeState {
                 client_group_id: Uuid::from_u128(19),
@@ -1678,7 +1678,34 @@ mod tests {
                 0x00, 0x00, 0x13, 0x01, 0x01, 0x00, 0x00, 0x00, 0x67
             ]
         );
-        assert_eq!(SessionWorkspaceKind::Bpmn.to_canonical_bytes(), vec![0x0A]);
+        assert_eq!(
+            WorkspaceKind::new("wk").unwrap().to_canonical_bytes(),
+            vec![0x0B, 0x02, 0x00, 0x00, 0x00, 0x77, 0x6B]
+        );
+    }
+
+    /// BL-T2 cut-over: every retired closed-enum tag (0x00-0x0A) is a
+    /// typed `UnsupportedWireVersion` rejection — never a silent default
+    /// and never a decodable value.
+    #[test]
+    fn workspace_kind_retired_tags_are_unsupported_wire_version() {
+        use crate::session_stack::WorkspaceKind;
+        for tag in 0x00u8..=0x0A {
+            let result = WorkspaceKind::from_canonical_bytes(&[tag]);
+            assert!(
+                matches!(
+                    result,
+                    Err(CanonicalDecodeError::UnsupportedWireVersion { tag: t, .. }) if t == tag
+                ),
+                "tag {tag:#04x} must be UnsupportedWireVersion, got {result:?}"
+            );
+        }
+        // And an out-of-range tag is still the generic unknown-tag error,
+        // proving the retired band is a distinct, deliberate rejection.
+        assert!(matches!(
+            WorkspaceKind::from_canonical_bytes(&[0x0C]),
+            Err(CanonicalDecodeError::UnknownTag { tag: 0x0C, .. })
+        ));
     }
 
     #[test]
@@ -2046,7 +2073,7 @@ mod proptest_round_trip {
 mod proptest_round_trip_v2_1h {
     use super::*;
     use crate::concurrency::RecordId;
-    use crate::session_stack::{SessionScopeState, SessionWorkspaceKind};
+    use crate::session_stack::{SessionScopeState, WorkspaceKind};
     use crate::types::{Addr, ErrorClass, Fiber, Incident, ProcessState, Value, WaitState};
     use proptest::collection::vec as pvec;
     use proptest::prelude::*;
@@ -2210,20 +2237,10 @@ mod proptest_round_trip_v2_1h {
         )
     }
 
-    fn arb_session_workspace_kind() -> impl Strategy<Value = SessionWorkspaceKind> {
-        prop_oneof![
-            Just(SessionWorkspaceKind::ProductMaintenance),
-            Just(SessionWorkspaceKind::Catalogue),
-            Just(SessionWorkspaceKind::Deal),
-            Just(SessionWorkspaceKind::Cbu),
-            Just(SessionWorkspaceKind::Kyc),
-            Just(SessionWorkspaceKind::InstrumentMatrix),
-            Just(SessionWorkspaceKind::OnBoarding),
-            Just(SessionWorkspaceKind::SemOsMaintenance),
-            Just(SessionWorkspaceKind::LifecycleResources),
-            Just(SessionWorkspaceKind::BookingPrincipal),
-            Just(SessionWorkspaceKind::Bpmn),
-        ]
+    fn arb_workspace_kind() -> impl Strategy<Value = WorkspaceKind> {
+        "[a-zA-Z0-9._:-]{1,64}".prop_map(|s| {
+            WorkspaceKind::new(s).expect("strategy generates only legal workspace kinds")
+        })
     }
 
     proptest! {
@@ -2280,9 +2297,9 @@ mod proptest_round_trip_v2_1h {
         }
 
         #[test]
-        fn session_workspace_kind_round_trip_is_a_fixed_point(kind in arb_session_workspace_kind()) {
+        fn workspace_kind_round_trip_is_a_fixed_point(kind in arb_workspace_kind()) {
             let bytes = kind.to_canonical_bytes();
-            let decoded = SessionWorkspaceKind::from_canonical_bytes(&bytes).expect("freshly-encoded SessionWorkspaceKind must decode");
+            let decoded = WorkspaceKind::from_canonical_bytes(&bytes).expect("freshly-encoded WorkspaceKind must decode");
             prop_assert_eq!(decoded.to_canonical_bytes(), bytes);
         }
     }

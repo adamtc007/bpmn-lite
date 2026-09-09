@@ -2816,7 +2816,7 @@ mod tests {
                 client_group_id: original_scope_id,
                 client_group_name: Some("Original".to_string()),
             }),
-            active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Cbu),
+            active_workspace: Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-c").unwrap()),
             workspace_stack: Vec::new(),
             trace_sequence: 7,
         };
@@ -2829,7 +2829,7 @@ mod tests {
             client_group_name: Some("Mutated".to_string()),
         });
         inst.session_stack.active_workspace =
-            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
+            Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-b").unwrap());
         inst.session_stack.trace_sequence = 99;
 
         let loaded = store
@@ -2848,7 +2848,7 @@ mod tests {
         );
         assert_eq!(
             loaded.session_stack.active_workspace,
-            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Cbu)
+            Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-c").unwrap())
         );
         assert_eq!(loaded.session_stack.trace_sequence, 7);
     }
@@ -3313,7 +3313,7 @@ mod tests {
             domain_payload_hash: [0u8; 32],
             session_stack: bpmn_lite_types::session_stack::SessionStackState {
                 session_id: original_session_id,
-                active_workspace: Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc),
+                active_workspace: Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-a").unwrap()),
                 trace_sequence: 11,
                 ..Default::default()
             },
@@ -3333,7 +3333,7 @@ mod tests {
 
         activation.session_stack.session_id = mutated_session_id;
         activation.session_stack.active_workspace =
-            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal);
+            Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-b").unwrap());
         activation.session_stack.trace_sequence = 42;
 
         let batch = store
@@ -3350,7 +3350,7 @@ mod tests {
         assert_eq!(batch[0].session_stack.session_id, original_session_id);
         assert_eq!(
             batch[0].session_stack.active_workspace,
-            Some(bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc)
+            Some(bpmn_lite_types::session_stack::WorkspaceKind::new("workspace-a").unwrap())
         );
         assert_eq!(batch[0].session_stack.trace_sequence, 11);
     }

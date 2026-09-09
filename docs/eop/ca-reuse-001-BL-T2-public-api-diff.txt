@@ -1,0 +1,230 @@
+24,59c24,49
+< pub enum bpmn_lite_types::session_stack::SessionWorkspaceKind
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::BookingPrincipal
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Bpmn
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Catalogue
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Cbu
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Deal
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::InstrumentMatrix
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::Kyc
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::LifecycleResources
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::OnBoarding
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::ProductMaintenance
+< pub bpmn_lite_types::session_stack::SessionWorkspaceKind::SemOsMaintenance
+< impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+< pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+< pub fn bpmn_lite_types::SessionWorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+< pub fn bpmn_lite_types::SessionWorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+< impl core::clone::Clone for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::clone(&self) -> bpmn_lite_types::SessionWorkspaceKind
+< impl core::cmp::Eq for bpmn_lite_types::SessionWorkspaceKind
+< impl core::cmp::PartialEq for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::eq(&self, &bpmn_lite_types::SessionWorkspaceKind) -> bool
+< impl core::fmt::Debug for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+< impl core::marker::StructuralPartialEq for bpmn_lite_types::SessionWorkspaceKind
+< impl serde_core::ser::Serialize for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+< impl<'de> serde_core::de::Deserialize<'de> for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+< impl core::marker::Freeze for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::Send for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::Sync for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::Unpin for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::UnsafeUnpin for bpmn_lite_types::SessionWorkspaceKind
+< impl core::panic::unwind_safe::RefUnwindSafe for bpmn_lite_types::SessionWorkspaceKind
+< impl core::panic::unwind_safe::UnwindSafe for bpmn_lite_types::SessionWorkspaceKind
+---
+> pub enum bpmn_lite_types::session_stack::WorkspaceKindError
+> pub bpmn_lite_types::session_stack::WorkspaceKindError::Empty
+> pub bpmn_lite_types::session_stack::WorkspaceKindError::IllegalByte
+> pub bpmn_lite_types::session_stack::WorkspaceKindError::IllegalByte::byte: u8
+> pub bpmn_lite_types::session_stack::WorkspaceKindError::IllegalByte::offset: usize
+> pub bpmn_lite_types::session_stack::WorkspaceKindError::TooLong
+> pub bpmn_lite_types::session_stack::WorkspaceKindError::TooLong::len: usize
+> pub bpmn_lite_types::session_stack::WorkspaceKindError::TooLong::max: usize
+> impl core::clone::Clone for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::clone(&self) -> bpmn_lite_types::WorkspaceKindError
+> impl core::cmp::Eq for bpmn_lite_types::WorkspaceKindError
+> impl core::cmp::PartialEq for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::eq(&self, &bpmn_lite_types::WorkspaceKindError) -> bool
+> impl core::error::Error for bpmn_lite_types::WorkspaceKindError
+> impl core::fmt::Debug for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::fmt::Display for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::marker::StructuralPartialEq for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Freeze for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Send for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Sync for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Unpin for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::UnsafeUnpin for bpmn_lite_types::WorkspaceKindError
+> impl core::panic::unwind_safe::RefUnwindSafe for bpmn_lite_types::WorkspaceKindError
+> impl core::panic::unwind_safe::UnwindSafe for bpmn_lite_types::WorkspaceKindError
+88c78
+< pub bpmn_lite_types::session_stack::SessionStackState::active_workspace: core::option::Option<bpmn_lite_types::SessionWorkspaceKind>
+---
+> pub bpmn_lite_types::session_stack::SessionStackState::active_workspace: core::option::Option<bpmn_lite_types::WorkspaceKind>
+116a107,142
+> pub struct bpmn_lite_types::session_stack::WorkspaceKind(_)
+> impl bpmn_lite_types::WorkspaceKind
+> pub const bpmn_lite_types::WorkspaceKind::MAX_LEN: usize
+> pub fn bpmn_lite_types::WorkspaceKind::as_str(&self) -> &str
+> pub fn bpmn_lite_types::WorkspaceKind::new(impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, bpmn_lite_types::WorkspaceKindError>
+> impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+> pub fn bpmn_lite_types::WorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+> pub fn bpmn_lite_types::WorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+> pub fn bpmn_lite_types::WorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+> impl core::clone::Clone for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::clone(&self) -> bpmn_lite_types::WorkspaceKind
+> impl core::cmp::Eq for bpmn_lite_types::WorkspaceKind
+> impl core::cmp::PartialEq for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::eq(&self, &bpmn_lite_types::WorkspaceKind) -> bool
+> impl core::convert::From<bpmn_lite_types::WorkspaceKind> for alloc::string::String
+> pub fn alloc::string::String::from(bpmn_lite_types::WorkspaceKind) -> Self
+> impl core::convert::TryFrom<alloc::string::String> for bpmn_lite_types::WorkspaceKind
+> pub type bpmn_lite_types::WorkspaceKind::Error = bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKind::try_from(alloc::string::String) -> core::result::Result<Self, Self::Error>
+> impl core::fmt::Debug for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::fmt::Display for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::marker::StructuralPartialEq for bpmn_lite_types::WorkspaceKind
+> impl serde_core::ser::Serialize for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+> impl<'de> serde_core::de::Deserialize<'de> for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+> impl core::marker::Freeze for bpmn_lite_types::WorkspaceKind
+> impl core::marker::Send for bpmn_lite_types::WorkspaceKind
+> impl core::marker::Sync for bpmn_lite_types::WorkspaceKind
+> impl core::marker::Unpin for bpmn_lite_types::WorkspaceKind
+> impl core::marker::UnsafeUnpin for bpmn_lite_types::WorkspaceKind
+> impl core::panic::unwind_safe::RefUnwindSafe for bpmn_lite_types::WorkspaceKind
+> impl core::panic::unwind_safe::UnwindSafe for bpmn_lite_types::WorkspaceKind
+225a252,254
+> pub bpmn_lite_types::CanonicalDecodeError::InvalidValue
+> pub bpmn_lite_types::CanonicalDecodeError::InvalidValue::message: alloc::string::String
+> pub bpmn_lite_types::CanonicalDecodeError::InvalidValue::type_name: &'static str
+231a261,263
+> pub bpmn_lite_types::CanonicalDecodeError::UnsupportedWireVersion
+> pub bpmn_lite_types::CanonicalDecodeError::UnsupportedWireVersion::tag: u8
+> pub bpmn_lite_types::CanonicalDecodeError::UnsupportedWireVersion::type_name: &'static str
+1291,1326d1322
+< pub enum bpmn_lite_types::SessionWorkspaceKind
+< pub bpmn_lite_types::SessionWorkspaceKind::BookingPrincipal
+< pub bpmn_lite_types::SessionWorkspaceKind::Bpmn
+< pub bpmn_lite_types::SessionWorkspaceKind::Catalogue
+< pub bpmn_lite_types::SessionWorkspaceKind::Cbu
+< pub bpmn_lite_types::SessionWorkspaceKind::Deal
+< pub bpmn_lite_types::SessionWorkspaceKind::InstrumentMatrix
+< pub bpmn_lite_types::SessionWorkspaceKind::Kyc
+< pub bpmn_lite_types::SessionWorkspaceKind::LifecycleResources
+< pub bpmn_lite_types::SessionWorkspaceKind::OnBoarding
+< pub bpmn_lite_types::SessionWorkspaceKind::ProductMaintenance
+< pub bpmn_lite_types::SessionWorkspaceKind::SemOsMaintenance
+< impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+< pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+< pub fn bpmn_lite_types::SessionWorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+< pub fn bpmn_lite_types::SessionWorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+< impl core::clone::Clone for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::clone(&self) -> bpmn_lite_types::SessionWorkspaceKind
+< impl core::cmp::Eq for bpmn_lite_types::SessionWorkspaceKind
+< impl core::cmp::PartialEq for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::eq(&self, &bpmn_lite_types::SessionWorkspaceKind) -> bool
+< impl core::fmt::Debug for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+< impl core::marker::StructuralPartialEq for bpmn_lite_types::SessionWorkspaceKind
+< impl serde_core::ser::Serialize for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+< impl<'de> serde_core::de::Deserialize<'de> for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+< impl core::marker::Freeze for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::Send for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::Sync for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::Unpin for bpmn_lite_types::SessionWorkspaceKind
+< impl core::marker::UnsafeUnpin for bpmn_lite_types::SessionWorkspaceKind
+< impl core::panic::unwind_safe::RefUnwindSafe for bpmn_lite_types::SessionWorkspaceKind
+< impl core::panic::unwind_safe::UnwindSafe for bpmn_lite_types::SessionWorkspaceKind
+1640a1637,1662
+> pub enum bpmn_lite_types::WorkspaceKindError
+> pub bpmn_lite_types::WorkspaceKindError::Empty
+> pub bpmn_lite_types::WorkspaceKindError::IllegalByte
+> pub bpmn_lite_types::WorkspaceKindError::IllegalByte::byte: u8
+> pub bpmn_lite_types::WorkspaceKindError::IllegalByte::offset: usize
+> pub bpmn_lite_types::WorkspaceKindError::TooLong
+> pub bpmn_lite_types::WorkspaceKindError::TooLong::len: usize
+> pub bpmn_lite_types::WorkspaceKindError::TooLong::max: usize
+> impl core::clone::Clone for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::clone(&self) -> bpmn_lite_types::WorkspaceKindError
+> impl core::cmp::Eq for bpmn_lite_types::WorkspaceKindError
+> impl core::cmp::PartialEq for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::eq(&self, &bpmn_lite_types::WorkspaceKindError) -> bool
+> impl core::error::Error for bpmn_lite_types::WorkspaceKindError
+> impl core::fmt::Debug for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::fmt::Display for bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKindError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::marker::StructuralPartialEq for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Freeze for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Send for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Sync for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::Unpin for bpmn_lite_types::WorkspaceKindError
+> impl core::marker::UnsafeUnpin for bpmn_lite_types::WorkspaceKindError
+> impl core::panic::unwind_safe::RefUnwindSafe for bpmn_lite_types::WorkspaceKindError
+> impl core::panic::unwind_safe::UnwindSafe for bpmn_lite_types::WorkspaceKindError
+3014c3036
+< pub bpmn_lite_types::SessionStackState::active_workspace: core::option::Option<bpmn_lite_types::SessionWorkspaceKind>
+---
+> pub bpmn_lite_types::SessionStackState::active_workspace: core::option::Option<bpmn_lite_types::WorkspaceKind>
+3411a3434,3469
+> pub struct bpmn_lite_types::WorkspaceKind(_)
+> impl bpmn_lite_types::WorkspaceKind
+> pub const bpmn_lite_types::WorkspaceKind::MAX_LEN: usize
+> pub fn bpmn_lite_types::WorkspaceKind::as_str(&self) -> &str
+> pub fn bpmn_lite_types::WorkspaceKind::new(impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, bpmn_lite_types::WorkspaceKindError>
+> impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+> pub fn bpmn_lite_types::WorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+> pub fn bpmn_lite_types::WorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+> pub fn bpmn_lite_types::WorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+> impl core::clone::Clone for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::clone(&self) -> bpmn_lite_types::WorkspaceKind
+> impl core::cmp::Eq for bpmn_lite_types::WorkspaceKind
+> impl core::cmp::PartialEq for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::eq(&self, &bpmn_lite_types::WorkspaceKind) -> bool
+> impl core::convert::From<bpmn_lite_types::WorkspaceKind> for alloc::string::String
+> pub fn alloc::string::String::from(bpmn_lite_types::WorkspaceKind) -> Self
+> impl core::convert::TryFrom<alloc::string::String> for bpmn_lite_types::WorkspaceKind
+> pub type bpmn_lite_types::WorkspaceKind::Error = bpmn_lite_types::WorkspaceKindError
+> pub fn bpmn_lite_types::WorkspaceKind::try_from(alloc::string::String) -> core::result::Result<Self, Self::Error>
+> impl core::fmt::Debug for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::fmt::Display for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+> impl core::marker::StructuralPartialEq for bpmn_lite_types::WorkspaceKind
+> impl serde_core::ser::Serialize for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+> impl<'de> serde_core::de::Deserialize<'de> for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+> impl core::marker::Freeze for bpmn_lite_types::WorkspaceKind
+> impl core::marker::Send for bpmn_lite_types::WorkspaceKind
+> impl core::marker::Sync for bpmn_lite_types::WorkspaceKind
+> impl core::marker::Unpin for bpmn_lite_types::WorkspaceKind
+> impl core::marker::UnsafeUnpin for bpmn_lite_types::WorkspaceKind
+> impl core::panic::unwind_safe::RefUnwindSafe for bpmn_lite_types::WorkspaceKind
+> impl core::panic::unwind_safe::UnwindSafe for bpmn_lite_types::WorkspaceKind
+3496,3500d3553
+< impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::SessionWorkspaceKind
+< pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+< pub fn bpmn_lite_types::SessionWorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+< pub fn bpmn_lite_types::SessionWorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+< pub fn bpmn_lite_types::SessionWorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
+3515a3569,3573
+> impl bpmn_lite_types::CanonicalEncode for bpmn_lite_types::WorkspaceKind
+> pub fn bpmn_lite_types::WorkspaceKind::canonical_decode(&mut bpmn_lite_types::CanonicalReader<'_>) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+> pub fn bpmn_lite_types::WorkspaceKind::canonical_encode(&self, &mut bpmn_lite_types::CanonicalWriter)
+> pub fn bpmn_lite_types::WorkspaceKind::from_canonical_bytes(&[u8]) -> core::result::Result<Self, bpmn_lite_types::CanonicalDecodeError>
+> pub fn bpmn_lite_types::WorkspaceKind::to_canonical_bytes(&self) -> alloc::vec::Vec<u8>
