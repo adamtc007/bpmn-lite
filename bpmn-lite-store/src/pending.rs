@@ -90,7 +90,9 @@ pub trait PendingInvocationStore: Send + Sync {
     async fn insert(&self, record: PendingInvocation) -> StoreResult<InsertOutcome>;
 
     /// Stage 2 — record the receiver's `execution_id` and the time
-    /// of the SubmissionAck. Returns `Err` if no row matches.
+    /// of the SubmissionAck. Write-once: `Err(NotFound)` if no row
+    /// matches, `Err(Conflict)` if the row is already acked — a second
+    /// ack must never overwrite the recorded execution identity.
     async fn record_ack(
         &self,
         tenant_id: &TenantId,
@@ -196,6 +198,11 @@ impl PendingInvocationStore for MemoryPendingInvocationStore {
             .ok_or_else(|| {
                 StoreError::NotFound(format!("pending row for callout_id {callout_id}"))
             })?;
+        if row.execution_id.is_some() {
+            return Err(StoreError::conflict(format!(
+                "pending row for callout_id {callout_id} is already acked"
+            )));
+        }
         row.execution_id = Some(execution_id);
         row.ack_received_at = Some(ack_received_at);
         Ok(())
@@ -279,6 +286,41 @@ mod tests {
             "cbu.create",
             idem,
         )
+    }
+
+    /// BL-T1 (EOP-PLAN-CA-REUSE-001): parity with the Postgres store —
+    /// stage-2 ack is write-once; a second ack conflicts, first is kept.
+    #[tokio::test]
+    async fn record_ack_is_write_once_second_ack_conflicts() {
+        let store = MemoryPendingInvocationStore::new();
+        let cid = Uuid::now_v7();
+        let pid = Uuid::now_v7();
+        store
+            .insert(record(cid, pid, Uuid::now_v7()))
+            .await
+            .unwrap();
+
+        let tenant = TenantId::new("default").unwrap();
+        let first_exec = Uuid::now_v7();
+        store
+            .record_ack(&tenant, cid, first_exec, Utc::now())
+            .await
+            .unwrap();
+
+        let second = store
+            .record_ack(&tenant, cid, Uuid::now_v7(), Utc::now())
+            .await;
+        assert!(
+            matches!(second, Err(StoreError::Conflict(_))),
+            "second ack must be a Conflict, got {second:?}"
+        );
+
+        let row = store
+            .lookup_by_callout_id(&tenant, cid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.execution_id, Some(first_exec), "first ack must survive");
     }
 
     #[tokio::test]

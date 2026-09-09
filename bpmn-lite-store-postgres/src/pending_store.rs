@@ -82,12 +82,17 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
             .await
             .map_err(StoreError::unavailable)?;
 
+        // Write-once: the same rule the transition-coupled ack enforces in
+        // `store_postgres.rs` (`... AND execution_id IS NULL`). A stale or
+        // duplicate SubmissionAck must never overwrite the recorded
+        // execution identity.
         let res = sqlx::query(
             r#"
             UPDATE bpmn_pending_invocation
                SET execution_id = $2,
                    ack_received_at = $3
              WHERE tenant_id = $4 AND callout_id = $1
+               AND execution_id IS NULL
             "#,
         )
         .bind(callout_id)
@@ -98,13 +103,30 @@ impl PendingInvocationStore for PostgresPendingInvocationStore {
         .await
         .map_err(StoreError::unavailable)?;
 
-        tx.commit().await.map_err(StoreError::unavailable)?;
-
         if res.rows_affected() != 1 {
-            return Err(StoreError::NotFound(format!(
-                "pending row for callout_id {callout_id}"
-            )));
+            // Distinguish "row missing" from "already acked" so a second
+            // ack is observable as a conflict rather than a lookup miss.
+            let existing = sqlx::query(
+                "SELECT execution_id FROM bpmn_pending_invocation \
+                 WHERE tenant_id = $1 AND callout_id = $2",
+            )
+            .bind(tenant_id.as_str())
+            .bind(callout_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(StoreError::unavailable)?;
+            tx.commit().await.map_err(StoreError::unavailable)?;
+            return Err(match existing {
+                Some(_) => StoreError::conflict(format!(
+                    "pending row for callout_id {callout_id} is already acked"
+                )),
+                None => StoreError::NotFound(format!(
+                    "pending row for callout_id {callout_id}"
+                )),
+            });
         }
+
+        tx.commit().await.map_err(StoreError::unavailable)?;
         Ok(())
     }
 
@@ -445,6 +467,45 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// BL-T1 (EOP-PLAN-CA-REUSE-001): stage-2 ack is write-once. A second
+    /// SubmissionAck for the same callout (stale sender resume, duplicate
+    /// delivery) must not overwrite the recorded execution identity — the
+    /// same rule the transition-coupled ack enforces via
+    /// `execution_id IS NULL` in `store_postgres.rs`.
+    #[tokio::test]
+    async fn record_ack_is_write_once_second_ack_conflicts() {
+        let (store, _lock) = setup().await;
+        let cid = Uuid::now_v7();
+        let pid = Uuid::now_v7();
+        insert_instance(&store, pid).await;
+        store
+            .insert(record(cid, pid, Uuid::now_v7()))
+            .await
+            .unwrap();
+
+        let tenant = TenantId::new("default").unwrap();
+        let first_exec = Uuid::now_v7();
+        store
+            .record_ack(&tenant, cid, first_exec, Utc::now())
+            .await
+            .unwrap();
+
+        let second = store
+            .record_ack(&tenant, cid, Uuid::now_v7(), Utc::now())
+            .await;
+        assert!(
+            matches!(second, Err(StoreError::Conflict(_))),
+            "second ack must be a Conflict, got {second:?}"
+        );
+
+        let row = store
+            .lookup_by_callout_id(&tenant, cid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.execution_id, Some(first_exec), "first ack must survive");
     }
 
     #[tokio::test]

@@ -47,6 +47,8 @@ pub enum StoreError {
     Invalid(String),
     #[error("store resource not found: {0}")]
     NotFound(String),
+    #[error("store write conflict: {0}")]
+    Conflict(String),
     #[error("store unavailable: {0}")]
     Unavailable(String),
 }
@@ -62,6 +64,10 @@ impl StoreError {
 
     pub fn unavailable(error: impl std::fmt::Display) -> Self {
         Self::Unavailable(error.to_string())
+    }
+
+    pub fn conflict(error: impl std::fmt::Display) -> Self {
+        Self::Conflict(error.to_string())
     }
 }
 
