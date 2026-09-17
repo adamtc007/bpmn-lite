@@ -6361,21 +6361,113 @@ async fn tick_made_zero_progress_detects_a_true_no_op_and_only_a_true_no_op() {
         !crate::engine::tick_made_zero_progress(&before, &state_only),
         "an instance state change alone is real progress even with no fiber upserts/deletes"
     );
+
+    // A `state_override` alone, with `next_snapshot` and both fiber vectors
+    // left byte-identical to the pre-tick instance, is also real progress —
+    // `materialize_snapshot`/`ring3_shadow_check`
+    // (`bpmn-lite-kernel/src/lib.rs`) both resolve the *effective*
+    // post-transition state as `state_override().unwrap_or(&next_snapshot
+    // ().state)`, so an override always wins at persistence time regardless
+    // of what `next_snapshot` itself says. No `apply_tick` code path sets
+    // `state_override` today (confirmed by review), so this exact shape is
+    // not currently reachable from a real kernel call — cemented as a
+    // regression test anyway, since the predicate's job is to never
+    // misclassify a real state change as a stall even for a mechanism nothing
+    // yet exercises.
+    let overridden = TransitionBuilder::new(before.clone())
+        .state(ProcessState::Terminated {
+            at: before.created_at,
+        })
+        .build();
+    assert!(
+        !crate::engine::tick_made_zero_progress(&before, &overridden),
+        "a state_override alone is real progress even with next_snapshot and \
+         both fiber vectors unchanged"
+    );
 }
 
-// ── CA-R1.5b, item 1's own liveness contract, under adversarial
-// interleaving: two independent "clock-like" callers (distinct owner
-// strings) polling `tick_due_timers` against timers armed by two separate
-// instances sharing one engine/store, interleaved with `run_instance` on
-// both — the shape ca-clock's calendar and relay clocks share in
-// corporate-actions-engine (docs/eop/findings/CA-R1.5b-drive-loop.md).
-// `claim_due_timers` does not scope by owner (item 2 of the same ruling —
-// parked, see the ruling's own record: genuine owner-scoping needs a
-// caller-identity carrier that does not exist anywhere between a
-// boundary-timer arm site and the store today), so owner "a" can and does
-// claim owner "b"'s timers here, on purpose. What this test asserts is item
-// 1's own contract regardless of that: no single engine call may ever run
-// past a generous wall-clock bound, across many seeded interleavings.
+// The exact park-as-incident `Transition` `tick_instance_inner` commits when
+// `tick_made_zero_progress` fires — no `apply_tick` code path in the current
+// ISA is known to produce a no-op `Transition` for a genuinely `Running`
+// fiber (confirmed by independent review: every early-return either upserts
+// the ticked fiber or changes the instance record), so this direct,
+// synchronous unit test of `stall_transition` — not an end-to-end run through
+// a real kernel tick — is this mechanism's own executable receipt for what it
+// commits when it does fire, cemented so its shape can't silently drift.
+#[tokio::test]
+async fn stall_transition_parks_the_named_fiber_and_incidents_the_instance() {
+    let (_engine, store, iid, _job_key, _hash) = setup_ni_cycle_guard().await;
+    let before = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap()
+        .unwrap();
+    let fiber = Fiber::new(Uuid::new_v4(), 4u32);
+    let fiber_id = fiber.fiber_id;
+    let pc = fiber.pc;
+    let incident_id = Uuid::new_v4();
+
+    let transition = crate::engine::stall_transition(
+        iid,
+        before.clone(),
+        fiber,
+        incident_id,
+        "long_work".to_string(),
+        before.created_at,
+    );
+
+    assert_eq!(
+        transition.next_snapshot().state,
+        ProcessState::Incidented { incident_id },
+        "the instance must be parked on the new incident, not left Running"
+    );
+    assert_eq!(transition.fibers_upsert().len(), 1);
+    assert_eq!(transition.fibers_upsert()[0].fiber_id, fiber_id);
+    assert_eq!(
+        transition.fibers_upsert()[0].wait,
+        WaitState::Incident { incident_id },
+        "the stalled fiber itself must be parked on the incident, not left Running \
+         (a re-tick would otherwise be free to pick it up again)"
+    );
+    assert!(transition.fibers_delete().is_empty());
+    assert_eq!(transition.incidents().len(), 1);
+    let incident = &transition.incidents()[0];
+    assert_eq!(incident.incident_id, incident_id);
+    assert_eq!(incident.process_instance_id, iid);
+    assert_eq!(incident.fiber_id, fiber_id);
+    assert_eq!(incident.bytecode_addr, pc);
+    assert_eq!(
+        incident.error_class,
+        ErrorClass::ContractViolation,
+        "not Transient — RetryPolicy::decision treats only Transient as \
+         retry-eligible, and this exact deterministic tick would never \
+         produce a different outcome on retry"
+    );
+    assert!(incident.message.contains(&fiber_id.to_string()));
+    assert!(incident.resolved_at.is_none());
+}
+
+// A liveness soak over the engine + MemoryStore drive loop under adversarial
+// cross-owner timer interleaving — the shape ca-clock's calendar and relay
+// clocks share in corporate-actions-engine
+// (docs/eop/findings/CA-R1.5b-drive-loop.md): two independent "clock-like"
+// callers (distinct owner strings) poll `tick_due_timers` against timers
+// armed by two separate instances sharing one engine/store, interleaved with
+// `run_instance` on both. `claim_due_timers` does not scope by owner (item 2
+// of the same ruling — parked: genuine owner-scoping needs a caller-identity
+// carrier that does not exist anywhere between a boundary-timer arm site and
+// the store today), so owner "a" can and does claim owner "b"'s timers here,
+// on purpose.
+//
+// Honest scope, not overclaimed: this does NOT exercise `tick_made_zero_
+// progress`'s `Stalled` branch — confirmed by direct instrumentation, it
+// never fires here (nor anywhere else in this suite; see
+// `stall_transition_parks_the_named_fiber_and_incidents_the_instance` for
+// that mechanism's own receipt). What this test does prove is the
+// surrounding contract regardless: no single engine call under this
+// adversarial interleaving may ever run past a generous wall-clock bound —
+// the actual, real-world symptom CA-R1.5b reports, independent of whether
+// this suite can reconstruct its unresolved root cause.
 #[tokio::test]
 async fn drive_loop_never_hangs_under_cross_owner_timer_interleaving() {
     let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());

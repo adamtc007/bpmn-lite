@@ -40,15 +40,22 @@ const MAX_SCHEDULER_IN_FLIGHT: usize = 32;
 ///
 /// `ProcessInstance` does not derive `PartialEq` (it is not meant to be
 /// compared field-by-field elsewhere), so equality here is decided the same
-/// way persistence already treats it — via its own `Serialize` impl —
-/// rather than this function guessing which of its fields a future
-/// instruction could mutate. A serialization failure on either side is
+/// way persistence's own `materialize_snapshot`/`ring3_shadow_check`
+/// (`bpmn-lite-kernel/src/lib.rs`) decide the *effective* post-transition
+/// state — `state_override()`, when present, wins over `next_snapshot`
+/// wholesale, so a `Some` override is unconditionally treated as change
+/// even without inspecting `next_snapshot` at all — via `next_snapshot`'s
+/// own `Serialize` impl, rather than this function guessing which of its
+/// fields a future instruction could mutate. A serialization failure is
 /// treated as "changed": this function may only ever suppress a real stall
 /// detection, never manufacture a false one.
 pub(crate) fn tick_made_zero_progress(
     instance_before: &ProcessInstance,
     transition: &Transition,
 ) -> bool {
+    if transition.state_override().is_some() {
+        return false;
+    }
     let instance_unchanged = match (
         serde_json::to_vec(instance_before),
         serde_json::to_vec(transition.next_snapshot()),
@@ -59,6 +66,60 @@ pub(crate) fn tick_made_zero_progress(
     instance_unchanged
         && transition.fibers_upsert().is_empty()
         && transition.fibers_delete().is_empty()
+}
+
+/// Builds the durable park-as-incident `Transition` `tick_instance_inner`
+/// commits in place of a zero-progress tick's own (discarded) no-op
+/// transition (CA-R1.5b, item 1). Pure and synchronous so the exact shape
+/// committed in production is directly unit-testable without needing a
+/// kernel call that actually produces a no-op `Transition` — no such call
+/// is currently constructible against this ISA (every `apply_tick`
+/// early-return either upserts the ticked fiber or changes the instance
+/// record), so this is the only executable receipt this mechanism has today
+/// beyond `tick_made_zero_progress` itself.
+///
+/// `error_class: ErrorClass::ContractViolation`, not `Transient`:
+/// `RetryPolicy::decision` (`bpmn-lite-types/src/transition.rs`) treats only
+/// `Transient` as retry-eligible, and this exact deterministic tick,
+/// replayed against these exact pinned inputs, will never produce a
+/// different outcome — auto-retrying it would just reproduce the identical
+/// stall. Matches `fail_contract`'s own precedent
+/// (`bpmn-lite-kernel/src/lib.rs`) for "this fiber cannot progress, park it
+/// as an Incident."
+pub(crate) fn stall_transition(
+    instance_id: Uuid,
+    instance_before: ProcessInstance,
+    stalled_fiber: Fiber,
+    incident_id: Uuid,
+    service_task_id: String,
+    created_at: Timestamp,
+) -> Transition {
+    let incident = Incident {
+        incident_id,
+        process_instance_id: instance_id,
+        fiber_id: stalled_fiber.fiber_id,
+        service_task_id,
+        bytecode_addr: stalled_fiber.pc,
+        error_class: ErrorClass::ContractViolation,
+        message: format!(
+            "tick made zero progress: fiber {} remained WaitState::Running at pc {} \
+             after a full kernel tick with no fiber or timer mutation produced — \
+             halting instead of re-ticking on no progress",
+            stalled_fiber.fiber_id, stalled_fiber.pc
+        ),
+        retry_count: 0,
+        created_at,
+        resolved_at: None,
+        resolution: None,
+    };
+    let mut parked_fiber = stalled_fiber;
+    parked_fiber.wait = WaitState::Incident { incident_id };
+    let mut next_instance = instance_before;
+    next_instance.state = ProcessState::Incidented { incident_id };
+    TransitionBuilder::new(next_instance)
+        .upsert_fiber(parked_fiber)
+        .incident(incident)
+        .build()
 }
 
 #[derive(Default)]
@@ -1436,39 +1497,21 @@ impl BpmnLiteEngine {
                         1,
                     )
                     .as_uuid();
-                    let incident = Incident {
+                    let service_task_id = artifact
+                        .envelope()
+                        .metadata()
+                        .debug_map()
+                        .get(&stalled_fiber.pc)
+                        .cloned()
+                        .unwrap_or_else(|| format!("pc_{}", stalled_fiber.pc));
+                    let stall_transition = stall_transition(
+                        instance_id,
+                        instance_before,
+                        stalled_fiber,
                         incident_id,
-                        process_instance_id: instance_id,
-                        fiber_id: stalled_fiber.fiber_id,
-                        service_task_id: artifact
-                            .envelope()
-                            .metadata()
-                            .debug_map()
-                            .get(&stalled_fiber.pc)
-                            .cloned()
-                            .unwrap_or_else(|| format!("pc_{}", stalled_fiber.pc)),
-                        bytecode_addr: stalled_fiber.pc,
-                        error_class: ErrorClass::Transient,
-                        message: format!(
-                            "tick made zero progress: fiber {} remained \
-                             WaitState::Running at pc {} after a full kernel \
-                             tick with no fiber or timer mutation produced — \
-                             halting instead of re-ticking on no progress",
-                            stalled_fiber.fiber_id, stalled_fiber.pc
-                        ),
-                        retry_count: 0,
-                        created_at: self.logical_time()?,
-                        resolved_at: None,
-                        resolution: None,
-                    };
-                    let mut parked_fiber = stalled_fiber;
-                    parked_fiber.wait = WaitState::Incident { incident_id };
-                    let mut next_instance = instance_before;
-                    next_instance.state = ProcessState::Incidented { incident_id };
-                    let stall_transition = TransitionBuilder::new(next_instance)
-                        .upsert_fiber(parked_fiber)
-                        .incident(incident)
-                        .build();
+                        service_task_id,
+                        self.logical_time()?,
+                    );
                     self.store
                         .commit_transition(&claim, &stall_transition)
                         .await
