@@ -6311,3 +6311,165 @@ async fn t_bl5_host_completes_after_ni_fire_and_handler_end() {
         acts.iter().map(|a| &a.task_type).collect::<Vec<_>>()
     );
 }
+
+// ── CA-R1.5b, item 1: `run_instance`'s drive loop ends a run on the first
+// zero-progress tick instead of re-ticking (bpmn-lite-engine/src/engine.rs,
+// `tick_instance_inner`/`tick_made_zero_progress`) ──
+
+#[tokio::test]
+async fn tick_made_zero_progress_detects_a_true_no_op_and_only_a_true_no_op() {
+    let (_engine, store, iid, _job_key, _hash) = setup_ni_cycle_guard().await;
+    let before = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // A transition whose next_snapshot is byte-identical to the instance we
+    // fed in, with no fiber upserts/deletes, is the true stall this
+    // predicate exists to catch (CA-R1.5b) — it must say "zero progress."
+    let no_op = TransitionBuilder::new(before.clone()).build();
+    assert!(
+        crate::engine::tick_made_zero_progress(&before, &no_op),
+        "an identical next_snapshot with no fiber changes must be zero progress"
+    );
+
+    // A fiber upsert alone is progress, even with the instance record
+    // otherwise unchanged.
+    let fiber_only = TransitionBuilder::new(before.clone())
+        .upsert_fiber(Fiber::new(Uuid::new_v4(), 0u32))
+        .build();
+    assert!(
+        !crate::engine::tick_made_zero_progress(&before, &fiber_only),
+        "a fiber upsert is real progress even with the instance record otherwise unchanged"
+    );
+
+    // An instance-record change alone (e.g. termination) is progress, even
+    // with zero fiber upserts/deletes. This is the regression this test
+    // cements: an earlier, narrower version of this predicate looked only
+    // at fibers_upsert/fibers_delete and misclassified exactly this shape,
+    // briefly breaking t_term_1_single_fiber_terminate and
+    // t_term_2_parallel_terminate_kills_siblings (both terminate an
+    // instance via next_snapshot.state alone, without touching every
+    // fiber) as zero-progress stalls.
+    let mut terminated = before.clone();
+    terminated.state = ProcessState::Terminated {
+        at: before.created_at,
+    };
+    let state_only = TransitionBuilder::new(terminated).build();
+    assert!(
+        !crate::engine::tick_made_zero_progress(&before, &state_only),
+        "an instance state change alone is real progress even with no fiber upserts/deletes"
+    );
+}
+
+// ── CA-R1.5b, item 1's own liveness contract, under adversarial
+// interleaving: two independent "clock-like" callers (distinct owner
+// strings) polling `tick_due_timers` against timers armed by two separate
+// instances sharing one engine/store, interleaved with `run_instance` on
+// both — the shape ca-clock's calendar and relay clocks share in
+// corporate-actions-engine (docs/eop/findings/CA-R1.5b-drive-loop.md).
+// `claim_due_timers` does not scope by owner (item 2 of the same ruling —
+// parked, see the ruling's own record: genuine owner-scoping needs a
+// caller-identity carrier that does not exist anywhere between a
+// boundary-timer arm site and the store today), so owner "a" can and does
+// claim owner "b"'s timers here, on purpose. What this test asserts is item
+// 1's own contract regardless of that: no single engine call may ever run
+// past a generous wall-clock bound, across many seeded interleavings.
+#[tokio::test]
+async fn drive_loop_never_hangs_under_cross_owner_timer_interleaving() {
+    let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+    let engine = BpmnLiteEngine::new(store.clone());
+
+    let program = bpmn_lite_types::legacy_program! {
+        bytecode_version: [77u8; 32],
+        program: vec![
+            Instr::PushI64(1_000),                              // 0: duration
+            Instr::V2GuardN { handler: 7.into() },               // 1
+            Instr::V2GuardArmTimer,                              // 2
+            Instr::V2GuardTimerCycle { max_fires: 3 },           // 3: R3
+            Instr::ExecNative { task_type: 0, argc: 0, retc: 0 }, // 4: long_work
+            Instr::V2GuardNEnd,                                  // 5
+            Instr::End,                                          // 6
+            Instr::ExecNative { task_type: 1, argc: 0, retc: 0 }, // 7: send_reminder (handler)
+            Instr::End,                                          // 8
+        ],
+        debug_map: BTreeMap::from([
+            (4.into(), "long_work".to_string()),
+            (7.into(), "send_reminder".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec!["long_work".to_string(), "send_reminder".to_string()],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
+    };
+    store
+        .store_program(program.bytecode_version(), &program)
+        .await
+        .unwrap();
+
+    for seed in 0u64..20 {
+        let payload_a = format!(r#"{{"case":"cross-owner-{seed}-a"}}"#);
+        let payload_b = format!(r#"{{"case":"cross-owner-{seed}-b"}}"#);
+        let hash_a = bpmn_lite_types::EffectId::content_hash(payload_a.as_bytes());
+        let hash_b = bpmn_lite_types::EffectId::content_hash(payload_b.as_bytes());
+        let iid_a = engine
+            .start(
+                "test",
+                program.bytecode_version(),
+                &payload_a,
+                hash_a,
+                "corr-cross-owner-a",
+            )
+            .await
+            .unwrap();
+        let iid_b = engine
+            .start(
+                "test",
+                program.bytecode_version(),
+                &payload_b,
+                hash_b,
+                "corr-cross-owner-b",
+            )
+            .await
+            .unwrap();
+        // Arm both boundary timers.
+        engine.tick_instance(iid_a).await.unwrap();
+        engine.tick_instance(iid_b).await.unwrap();
+
+        let mut lcg = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        for round in 0..40u32 {
+            lcg = lcg
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let choice = (lcg >> 33) % 4;
+            let step = async {
+                match choice {
+                    0 => engine.run_instance(iid_a).await.map(|_| ()),
+                    1 => engine.run_instance(iid_b).await.map(|_| ()),
+                    2 => engine
+                        .tick_due_timers("owner-a", FAR_FUTURE_TIMER_MS, 10, 5_000)
+                        .await
+                        .map(|_| ()),
+                    _ => engine
+                        .tick_due_timers("owner-b", FAR_FUTURE_TIMER_MS, 10, 5_000)
+                        .await
+                        .map(|_| ()),
+                }
+            };
+            let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), step).await;
+            assert!(
+                outcome.is_ok(),
+                "seed {seed}, round {round}, choice {choice}: a single engine call exceeded \
+                 its 2s wall-clock bound — CA-R1.5b's own drive-loop hang shape"
+            );
+            // A call is allowed to fail outright (e.g. a stale/already-
+            // consumed timer, or a claim momentarily held by the other
+            // interleaved call) — only a hang is a failure here.
+        }
+    }
+}

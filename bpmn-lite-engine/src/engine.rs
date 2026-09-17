@@ -30,6 +30,37 @@ const DEFAULT_MESSAGE_CLAIM_MS: u64 = 30_000;
 const DEFAULT_ARTIFACT_CACHE_CAPACITY: usize = 128;
 const MAX_SCHEDULER_IN_FLIGHT: usize = 32;
 
+/// True iff a tick that claimed a genuinely `Running` fiber produced a
+/// `Transition` that changes nothing — no fiber upserted or deleted, and no
+/// other change to the instance record (completion, termination, a
+/// flag/counter write, ...). Re-tried, such a tick would claim the same
+/// fiber and repeat identically, up to `MAX_BYTECODE_INSTRUCTIONS` times,
+/// before the loop's own bound caught it (CA-R1.5b) — this is the predicate
+/// `tick_instance_inner` uses to end the run on the first occurrence instead.
+///
+/// `ProcessInstance` does not derive `PartialEq` (it is not meant to be
+/// compared field-by-field elsewhere), so equality here is decided the same
+/// way persistence already treats it — via its own `Serialize` impl —
+/// rather than this function guessing which of its fields a future
+/// instruction could mutate. A serialization failure on either side is
+/// treated as "changed": this function may only ever suppress a real stall
+/// detection, never manufacture a false one.
+pub(crate) fn tick_made_zero_progress(
+    instance_before: &ProcessInstance,
+    transition: &Transition,
+) -> bool {
+    let instance_unchanged = match (
+        serde_json::to_vec(instance_before),
+        serde_json::to_vec(transition.next_snapshot()),
+    ) {
+        (Ok(before), Ok(after)) => before == after,
+        _ => false,
+    };
+    instance_unchanged
+        && transition.fibers_upsert().is_empty()
+        && transition.fibers_delete().is_empty()
+}
+
 #[derive(Default)]
 struct ArtifactCache {
     entries: BTreeMap<ArtifactHash, Arc<ExecutableWorkflow>>,
@@ -1263,6 +1294,17 @@ impl BpmnLiteEngine {
         fields(tenant_id = %self.tenant_id, instance_id = %instance_id, owner)
     )]
     async fn tick_instance_inner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
+        // A single loop iteration's outcome. `Quiescent` and `Stalled` both
+        // end the run (`return Ok(())`) — kept as distinct variants so the
+        // "genuinely nothing to do" ending can never be silently reused for
+        // the "a Running fiber produced no change" ending; a future change
+        // to either arm has to name which one it means.
+        enum TickStep {
+            Progressed,
+            Quiescent,
+            Stalled,
+        }
+
         for _ in 0..MAX_BYTECODE_INSTRUCTIONS {
             let work = self
                 .store
@@ -1283,7 +1325,7 @@ impl BpmnLiteEngine {
                 let (claim, mut snapshot, command) = work.into_parts();
                 let instance = snapshot.instance();
                 if instance.state != ProcessState::Running {
-                    return Ok(None);
+                    return Ok(TickStep::Quiescent);
                 }
                 let artifact = self
                     .load_artifact_cached(ArtifactHash::from_bytes(instance.bytecode_version))
@@ -1293,8 +1335,20 @@ impl BpmnLiteEngine {
                     .values()
                     .any(|fiber| fiber.wait == WaitState::Running)
                 {
-                    return Ok(None);
+                    return Ok(TickStep::Quiescent);
                 }
+                // Captured now, as owned values, because `instance` borrows
+                // `snapshot` and `snapshot` is reassigned below
+                // (`with_buffered_messages`) before the kernel call — these
+                // are only needed if that kernel call turns out to be a
+                // no-op (stall path), so cloning them is cheap relative to
+                // the alternative of re-deriving them from a stale borrow.
+                let instance_before = instance.clone();
+                let stalled_fiber_before = snapshot
+                    .fibers()
+                    .values()
+                    .find(|fiber| fiber.wait == WaitState::Running)
+                    .cloned();
                 let mut buffered_messages = Vec::new();
                 for fiber in snapshot
                     .fibers()
@@ -1359,11 +1413,73 @@ impl BpmnLiteEngine {
                 );
                 let transition = apply_kernel(&artifact, &snapshot, &command, &context)
                     .map_err(|error| anyhow!(error))?;
+                // A tick that claimed a genuinely Running fiber but produced
+                // neither a fiber upsert/delete nor any other change to the
+                // instance record (completion, termination, a flag/counter
+                // write, ...) leaves the schedulable set exactly as it was —
+                // the next iteration would claim the same fiber and repeat,
+                // up to MAX_BYTECODE_INSTRUCTIONS times, before this loop's
+                // own bound caught it (CA-R1.5b). Detect it on the first
+                // occurrence instead: commit a durable Incident naming the
+                // stuck fiber in place of the no-op transition, and end the
+                // run now rather than re-ticking on no progress.
+                if tick_made_zero_progress(&instance_before, &transition) {
+                    let stalled_fiber = stalled_fiber_before.ok_or_else(|| {
+                        anyhow!(
+                            "instance {instance_id}: zero-progress tick but no \
+                             Running fiber found to name"
+                        )
+                    })?;
+                    let incident_id = EffectId::for_transition(
+                        instance_id,
+                        claim.expected_revision().saturating_add(1),
+                        1,
+                    )
+                    .as_uuid();
+                    let incident = Incident {
+                        incident_id,
+                        process_instance_id: instance_id,
+                        fiber_id: stalled_fiber.fiber_id,
+                        service_task_id: artifact
+                            .envelope()
+                            .metadata()
+                            .debug_map()
+                            .get(&stalled_fiber.pc)
+                            .cloned()
+                            .unwrap_or_else(|| format!("pc_{}", stalled_fiber.pc)),
+                        bytecode_addr: stalled_fiber.pc,
+                        error_class: ErrorClass::Transient,
+                        message: format!(
+                            "tick made zero progress: fiber {} remained \
+                             WaitState::Running at pc {} after a full kernel \
+                             tick with no fiber or timer mutation produced — \
+                             halting instead of re-ticking on no progress",
+                            stalled_fiber.fiber_id, stalled_fiber.pc
+                        ),
+                        retry_count: 0,
+                        created_at: self.logical_time()?,
+                        resolved_at: None,
+                        resolution: None,
+                    };
+                    let mut parked_fiber = stalled_fiber;
+                    parked_fiber.wait = WaitState::Incident { incident_id };
+                    let mut next_instance = instance_before;
+                    next_instance.state = ProcessState::Incidented { incident_id };
+                    let stall_transition = TransitionBuilder::new(next_instance)
+                        .upsert_fiber(parked_fiber)
+                        .incident(incident)
+                        .build();
+                    self.store
+                        .commit_transition(&claim, &stall_transition)
+                        .await
+                        .map_err(|error| anyhow!(error))?;
+                    return Ok(TickStep::Stalled);
+                }
                 self.store
                     .commit_transition(&claim, &transition)
                     .await
                     .map_err(|error| anyhow!(error))?;
-                Ok(Some(()))
+                Ok(TickStep::Progressed)
             }
             .await;
             let release = self
@@ -1371,12 +1487,13 @@ impl BpmnLiteEngine {
                 .release_instance_transition(&self.tenant_id, instance_id, &lease_token)
                 .await;
             match (result, release) {
-                (Ok(Some(())), Ok(())) => {
+                (Ok(TickStep::Progressed), Ok(())) => {
                     self.dispatch_pending_effects(owner, 32, self.transition_lease_ms)
                         .await?;
                     continue;
                 }
-                (Ok(None), Ok(())) => return Ok(()),
+                (Ok(TickStep::Quiescent), Ok(())) => return Ok(()),
+                (Ok(TickStep::Stalled), Ok(())) => return Ok(()),
                 (Err(error), _) => return Err(error),
                 (Ok(_), Err(error)) => return Err(error.into()),
             }
