@@ -6386,16 +6386,109 @@ async fn tick_made_zero_progress_detects_a_true_no_op_and_only_a_true_no_op() {
     );
 }
 
-// The exact park-as-incident `Transition` `tick_instance_inner` commits when
-// `tick_made_zero_progress` fires — no `apply_tick` code path in the current
-// ISA is known to produce a no-op `Transition` for a genuinely `Running`
-// fiber (confirmed by independent review: every early-return either upserts
-// the ticked fiber or changes the instance record), so this direct,
-// synchronous unit test of `stall_transition` — not an end-to-end run through
-// a real kernel tick — is this mechanism's own executable receipt for what it
-// commits when it does fire, cemented so its shape can't silently drift.
+// The property the whole cycle-detection mechanism depends on:
+// `PersistedSnapshotState::schedulable_state_hash()` must (a) be
+// deterministic — the same state hashes the same twice — (b) be sensitive
+// to any actual state change (a different fiber pc, a different flag), and
+// (c), the whole point, be INDEPENDENT of `revision` — unlike
+// `SnapshotEnvelope::state_hash()` (Ring 2, storage integrity), which folds
+// `revision` in specifically so persisted envelopes never collide.
+// Confirmed here directly against real `PersistedSnapshotState`/
+// `SnapshotEnvelope` values (via `setup_ni_cycle_guard`'s real instance),
+// not just asserted in a doc comment.
 #[tokio::test]
-async fn stall_transition_parks_the_named_fiber_and_incidents_the_instance() {
+async fn schedulable_state_hash_is_deterministic_sensitive_and_revision_independent() {
+    let (_engine, store, iid, _job_key, _hash) = setup_ni_cycle_guard().await;
+    let instance = store
+        .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
+        .await
+        .unwrap()
+        .unwrap();
+    let fiber_a = Fiber::new(Uuid::new_v4(), 0u32);
+    let mut fiber_b = fiber_a.clone();
+    fiber_b.pc = 4u32.into();
+
+    let state = PersistedSnapshotState::new(
+        instance.clone(),
+        [fiber_a.clone()],
+        BTreeMap::new(),
+        [],
+        ConcurrencyTable::new(),
+        [],
+    );
+    let state_again = PersistedSnapshotState::new(
+        instance.clone(),
+        [fiber_a.clone()],
+        BTreeMap::new(),
+        [],
+        ConcurrencyTable::new(),
+        [],
+    );
+    let state_different_fiber = PersistedSnapshotState::new(
+        instance.clone(),
+        [fiber_b],
+        BTreeMap::new(),
+        [],
+        ConcurrencyTable::new(),
+        [],
+    );
+
+    let hash = state.schedulable_state_hash().unwrap();
+    assert_eq!(
+        hash,
+        state_again.schedulable_state_hash().unwrap(),
+        "the same state must hash identically every time"
+    );
+    assert_ne!(
+        hash,
+        state_different_fiber.schedulable_state_hash().unwrap(),
+        "a real state change (a different fiber pc) must change the hash"
+    );
+
+    // The revision-independence property itself: wrap the SAME
+    // PersistedSnapshotState in two SnapshotEnvelopes differing only in
+    // `revision`. Ring 2's own `state_hash()` must disagree between them
+    // (that's the whole reason it folds revision in — every persisted
+    // envelope hashes uniquely); `schedulable_state_hash()`, computed
+    // straight off the shared `PersistedSnapshotState`, doesn't go through
+    // `SnapshotEnvelope` at all, so it can't see `revision` to begin with —
+    // asserted here as the concrete reason two different-revision envelopes
+    // built over the identical state still collide for cycle-detection
+    // purposes.
+    let envelope_rev_7 = SnapshotEnvelope::new(1, instance.bytecode_version, 7, state);
+    let envelope_rev_8 = SnapshotEnvelope::new(1, instance.bytecode_version, 8, state_again);
+    assert_ne!(
+        envelope_rev_7.state_hash().unwrap(),
+        envelope_rev_8.state_hash().unwrap(),
+        "Ring 2's state_hash() must differ across revisions — that's its own job"
+    );
+    assert_eq!(
+        envelope_rev_7.state().schedulable_state_hash().unwrap(),
+        envelope_rev_8.state().schedulable_state_hash().unwrap(),
+        "schedulable_state_hash() must agree across revisions for the identical \
+         underlying state — this is the property cycle detection relies on"
+    );
+}
+
+// The exact park-as-incident `Transition` `tick_instance_inner` commits when
+// a cycle closes — no `apply_tick` code path in the current ISA is known to
+// produce the length-1 (zero-progress) case for a genuinely `Running` fiber
+// (confirmed by independent review: every early-return either upserts the
+// ticked fiber or changes the instance record), so this direct, synchronous
+// unit test of `cycle_transition` — not an end-to-end run through a real
+// kernel tick — is that case's own executable receipt for what it commits
+// when it does fire, cemented so its shape can't silently drift. A genuine
+// multi-tick (length > 1) cycle through the real kernel is, on the evidence
+// gathered while building this (every spawned fiber's id is derived from
+// the ever-increasing revision counter, `context.derived_id`/
+// `EffectId::for_transition`, so no two ticks in one run can ever produce
+// byte-identical new state on purpose), likely not constructible via any
+// artifact — legal or hand-authored — without an actual kernel defect to
+// exploit; the fuzz target below instead stress-tests the ABSENCE of false
+// positives (a real, varied set of runs, none of which should ever revisit
+// a state) rather than trying to force a true one.
+#[tokio::test]
+async fn cycle_transition_parks_the_named_fiber_and_incidents_the_instance() {
     let (_engine, store, iid, _job_key, _hash) = setup_ni_cycle_guard().await;
     let before = store
         .load_instance(&bpmn_lite_types::TenantId::new("default").unwrap(), iid)
@@ -6406,14 +6499,20 @@ async fn stall_transition_parks_the_named_fiber_and_incidents_the_instance() {
     let fiber_id = fiber.fiber_id;
     let pc = fiber.pc;
     let incident_id = Uuid::new_v4();
+    let repeated_hash = [0x42u8; 32];
 
-    let transition = crate::engine::stall_transition(
+    let transition = crate::engine::cycle_transition(
         iid,
         before.clone(),
         fiber,
         incident_id,
         "long_work".to_string(),
         before.created_at,
+        crate::engine::CycleWitness {
+            repeated_hash,
+            first_revision: 7,
+            repeat_revision: 8,
+        },
     );
 
     assert_eq!(
@@ -6426,7 +6525,7 @@ async fn stall_transition_parks_the_named_fiber_and_incidents_the_instance() {
     assert_eq!(
         transition.fibers_upsert()[0].wait,
         WaitState::Incident { incident_id },
-        "the stalled fiber itself must be parked on the incident, not left Running \
+        "the cycled fiber itself must be parked on the incident, not left Running \
          (a re-tick would otherwise be free to pick it up again)"
     );
     assert!(transition.fibers_delete().is_empty());
@@ -6440,10 +6539,18 @@ async fn stall_transition_parks_the_named_fiber_and_incidents_the_instance() {
         incident.error_class,
         ErrorClass::ContractViolation,
         "not Transient — RetryPolicy::decision treats only Transient as \
-         retry-eligible, and this exact deterministic tick would never \
+         retry-eligible, and this exact deterministic cycle would never \
          produce a different outcome on retry"
     );
     assert!(incident.message.contains(&fiber_id.to_string()));
+    assert!(incident.message.contains(&hex::encode(repeated_hash)));
+    assert!(incident.message.contains("revision 7"));
+    assert!(incident.message.contains("revision 8"));
+    assert!(
+        incident.message.contains("cycle length 1"),
+        "repeat_revision(8) - first_revision(7) == 1: {}",
+        incident.message
+    );
     assert!(incident.resolved_at.is_none());
 }
 
@@ -6563,5 +6670,134 @@ async fn drive_loop_never_hangs_under_cross_owner_timer_interleaving() {
             // consumed timer, or a claim momentarily held by the other
             // interleaved call) — only a hang is a failure here.
         }
+    }
+}
+
+// ── CA-R1.5b, amended ruling: "random legal artifacts driven until
+// quiescent, assert no run ever revisits a snapshot without Incidenting."
+// Builds a variable-`max_fires` re-arming-timer-cycle artifact per seed
+// (`setup_ni_cycle_guard`'s own program, generalized — a real compiled
+// bytecode difference per seed, not just varied runtime inputs) and drives
+// it, via the exact `tick_due_timers` mechanism `t_ni_2_cycle_fires_
+// multiple_times` already proves correct, through every one of its
+// `max_fires` real re-arms plus one past exhaustion
+// (`t_ni_3_cycle_exhausted_reverts_to_job`'s own shape). Every one of these
+// re-arm cycles is a REAL backward-jump-shaped repetition at the bytecode
+// level (the guard's timer instruction address is revisited `max_fires`
+// times) — exactly the shape a naive detector might misfire on — but each
+// fire spawns a fresh escalation handler fibre with a revision-derived id
+// (`context.derived_id(0)`, keyed off the ever-increasing commit revision),
+// so the persisted schedulable state genuinely differs every time. The
+// invariant under test is the absence of false positives: none of these
+// real, varied, repeatedly-re-arming runs may ever misfire a "cycle
+// detected" Incident.
+fn build_ni_cycle_program(max_fires: u32, bytecode_version: [u8; 32]) -> CompiledProgram {
+    bpmn_lite_types::legacy_program! {
+        bytecode_version: bytecode_version,
+        program: vec![
+            Instr::PushI64(1_000),                              // 0: duration
+            Instr::V2GuardN { handler: 7.into() },               // 1
+            Instr::V2GuardArmTimer,                              // 2
+            Instr::V2GuardTimerCycle { max_fires },              // 3: R3
+            Instr::ExecNative { task_type: 0, argc: 0, retc: 0 }, // 4: long_work
+            Instr::V2GuardNEnd,                                  // 5
+            Instr::End,                                          // 6
+            Instr::ExecNative { task_type: 1, argc: 0, retc: 0 }, // 7: send_reminder (handler)
+            Instr::End,                                          // 8
+        ],
+        debug_map: BTreeMap::from([
+            (4.into(), "long_work".to_string()),
+            (7.into(), "send_reminder".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec!["long_work".to_string(), "send_reminder".to_string()],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn cycle_detection_never_false_positives_across_randomized_rearm_counts() {
+    for seed in 0u64..20 {
+        let mut lcg = seed.wrapping_mul(2_685_821_657_736_338_717).wrapping_add(1);
+        lcg = lcg.wrapping_mul(2_685_821_657_736_338_717).wrapping_add(1);
+        let max_fires = 1 + (lcg >> 40) % 6; // 1..=6, varies per seed
+
+        let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
+        let engine = BpmnLiteEngine::new(store.clone());
+        let mut bytecode_version = [0u8; 32];
+        bytecode_version[0..8].copy_from_slice(&seed.to_le_bytes());
+        let program = build_ni_cycle_program(max_fires as u32, bytecode_version);
+        store
+            .store_program(program.bytecode_version(), &program)
+            .await
+            .unwrap();
+
+        let payload = format!(r#"{{"case":"cycle-fuzz-{seed}"}}"#);
+        let hash = bpmn_lite_types::EffectId::content_hash(payload.as_bytes());
+        let iid = engine
+            .start(
+                "test",
+                program.bytecode_version(),
+                &payload,
+                hash,
+                "corr-cycle-fuzz",
+            )
+            .await
+            .unwrap();
+        // Arms the boundary timer.
+        let step = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            engine.tick_instance(iid),
+        )
+        .await;
+        assert!(step.is_ok(), "seed {seed}: arming tick hung");
+        step.unwrap().unwrap();
+
+        // Fire every one of `max_fires` re-arms, plus one past exhaustion —
+        // the exact real-repetition shape this mechanism must not misfire on.
+        for i in 0..(max_fires + 1) {
+            let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+            let step = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                engine.tick_due_timers("timer-fuzz", fired_at, 10, 30_000),
+            )
+            .await;
+            assert!(
+                step.is_ok(),
+                "seed {seed}, max_fires {max_fires}, fire {i}: tick_due_timers hung"
+            );
+            step.unwrap().unwrap();
+        }
+        let step = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            engine.tick_instance(iid),
+        )
+        .await;
+        assert!(step.is_ok(), "seed {seed}: draining tick hung");
+        step.unwrap().unwrap();
+
+        let inspection = engine.inspect(iid).await.unwrap();
+        let false_positive = matches!(inspection.state, ProcessState::Incidented { .. })
+            && inspection
+                .incidents
+                .iter()
+                .any(|incident| incident.message.starts_with("cycle detected"));
+        assert!(
+            !false_positive,
+            "seed {seed}, max_fires {max_fires}: a real, varied re-arming timer cycle \
+             (every fire spawning a fresh, revision-derived handler fibre) must never be \
+             misclassified as a repeated schedulable state — inspection: {inspection:?}"
+        );
+        assert_eq!(
+            inspection.state,
+            ProcessState::Running,
+            "seed {seed}, max_fires {max_fires}: the host fibre must still be running, \
+             parked on its own job, throughout every re-arm and past exhaustion"
+        );
     }
 }

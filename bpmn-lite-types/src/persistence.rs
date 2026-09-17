@@ -88,6 +88,26 @@ impl PersistedSnapshotState {
         &self.pending_effects
     }
 
+    /// The same BLAKE3(canonical(...)) domain as `SnapshotEnvelope::
+    /// state_hash()` — `instance ‖ fibres ‖ join counts ‖ incidents ‖
+    /// concurrency table ‖ pending-effect set` — but WITHOUT that method's
+    /// own `revision`/`artifact_hash` bytes folded in on top. `revision`
+    /// strictly increases on every commit, so a hash that includes it can
+    /// never repeat by construction; omitting it is exactly what lets two
+    /// structurally-identical schedulable states at different revisions
+    /// hash identically, which is the whole point of using this for
+    /// liveness/cycle detection (CA-R1.5b, `bpmn-lite-engine`'s
+    /// `tick_instance_inner`) rather than storage integrity — for that,
+    /// `SnapshotEnvelope::state_hash()` remains the sole authority; never
+    /// substitute this for it.
+    pub fn schedulable_state_hash(&self) -> Result<[u8; 32], PersistenceEnvelopeError> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.try_canonical_hash_bytes()?);
+        hasher.update(&self.concurrency_table.to_canonical_bytes());
+        hasher.update(&self.pending_effects.to_canonical_bytes());
+        Ok(*hasher.finalize().as_bytes())
+    }
+
     pub fn to_runtime_snapshot(&self) -> Snapshot {
         Snapshot::new(self.instance.clone(), self.fibers.values().cloned())
             .with_join_counts(self.join_counts.clone())

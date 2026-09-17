@@ -2,7 +2,7 @@
 use crate::runtime_context::{RuntimeContext, SystemRuntimeContext};
 use anyhow::{anyhow, Result};
 use bpmn_lite_compiler::{parse_bpmn_with_meta, verify_bytecode};
-use bpmn_lite_kernel::{apply as apply_kernel, DeterministicContext};
+use bpmn_lite_kernel::{apply as apply_kernel, materialize_snapshot, DeterministicContext};
 use bpmn_lite_store::store::WorkflowStore;
 use bpmn_lite_store::CommitOutcome;
 use bpmn_lite_types::session_stack::SessionStackState;
@@ -68,51 +68,77 @@ pub(crate) fn tick_made_zero_progress(
         && transition.fibers_delete().is_empty()
 }
 
+/// The evidence a detected cycle names in its `Incident`: the schedulable
+/// state hash that repeated, and the two commit revisions that bracket the
+/// repeat — `first_revision` is when that hash was first reached in this
+/// run, `repeat_revision` is the commit that reached it again. Zero
+/// progress (the original, narrower CA-R1.5b mechanism) is the length-1
+/// case: `repeat_revision - first_revision == 1`.
+pub(crate) struct CycleWitness {
+    pub(crate) repeated_hash: [u8; 32],
+    pub(crate) first_revision: u64,
+    pub(crate) repeat_revision: u64,
+}
+
 /// Builds the durable park-as-incident `Transition` `tick_instance_inner`
-/// commits in place of a zero-progress tick's own (discarded) no-op
-/// transition (CA-R1.5b, item 1). Pure and synchronous so the exact shape
-/// committed in production is directly unit-testable without needing a
-/// kernel call that actually produces a no-op `Transition` — no such call
-/// is currently constructible against this ISA (every `apply_tick`
-/// early-return either upserts the ticked fiber or changes the instance
-/// record), so this is the only executable receipt this mechanism has today
-/// beyond `tick_made_zero_progress` itself.
+/// commits in place of a cycle-closing tick's own (discarded) transition
+/// (CA-R1.5b, amended ruling). Pure and synchronous so the exact shape
+/// committed in production is directly unit-testable without needing a real
+/// kernel call that actually produces a repeated schedulable state — no
+/// zero-progress instance of that (the length-1 case) is currently
+/// constructible against this ISA (every `apply_tick` early-return either
+/// upserts the ticked fiber or changes the instance record), so this is the
+/// only executable receipt that case of this mechanism has today beyond
+/// `tick_made_zero_progress` itself; longer cycles (length > 1) are exercised
+/// end to end by `cycle_detection_ends_a_looping_artifact_incidented` (a
+/// hand-authored bytecode loop with no bound, driven through `run_instance`
+/// for real).
 ///
 /// `error_class: ErrorClass::ContractViolation`, not `Transient`:
 /// `RetryPolicy::decision` (`bpmn-lite-types/src/transition.rs`) treats only
-/// `Transient` as retry-eligible, and this exact deterministic tick,
+/// `Transient` as retry-eligible, and this exact deterministic cycle,
 /// replayed against these exact pinned inputs, will never produce a
-/// different outcome — auto-retrying it would just reproduce the identical
-/// stall. Matches `fail_contract`'s own precedent
+/// different outcome — auto-retrying it would just walk the same cycle
+/// again. Matches `fail_contract`'s own precedent
 /// (`bpmn-lite-kernel/src/lib.rs`) for "this fiber cannot progress, park it
 /// as an Incident."
-pub(crate) fn stall_transition(
+pub(crate) fn cycle_transition(
     instance_id: Uuid,
     instance_before: ProcessInstance,
-    stalled_fiber: Fiber,
+    cycled_fiber: Fiber,
     incident_id: Uuid,
     service_task_id: String,
     created_at: Timestamp,
+    witness: CycleWitness,
 ) -> Transition {
+    let cycle_length = witness.repeat_revision.saturating_sub(witness.first_revision);
     let incident = Incident {
         incident_id,
         process_instance_id: instance_id,
-        fiber_id: stalled_fiber.fiber_id,
+        fiber_id: cycled_fiber.fiber_id,
         service_task_id,
-        bytecode_addr: stalled_fiber.pc,
+        bytecode_addr: cycled_fiber.pc,
         error_class: ErrorClass::ContractViolation,
         message: format!(
-            "tick made zero progress: fiber {} remained WaitState::Running at pc {} \
-             after a full kernel tick with no fiber or timer mutation produced — \
-             halting instead of re-ticking on no progress",
-            stalled_fiber.fiber_id, stalled_fiber.pc
+            "cycle detected: schedulable state (hash {}) reached again — first at revision \
+             {} (transition {}), repeated at revision {} (transition {}), cycle length {}; \
+             fiber {} was WaitState::Running at pc {} when the cycle closed — halting instead \
+             of re-ticking through it again",
+            hex::encode(witness.repeated_hash),
+            witness.first_revision,
+            EffectId::for_transition(instance_id, witness.first_revision, 0).as_uuid(),
+            witness.repeat_revision,
+            EffectId::for_transition(instance_id, witness.repeat_revision, 0).as_uuid(),
+            cycle_length,
+            cycled_fiber.fiber_id,
+            cycled_fiber.pc
         ),
         retry_count: 0,
         created_at,
         resolved_at: None,
         resolution: None,
     };
-    let mut parked_fiber = stalled_fiber;
+    let mut parked_fiber = cycled_fiber;
     parked_fiber.wait = WaitState::Incident { incident_id };
     let mut next_instance = instance_before;
     next_instance.state = ProcessState::Incidented { incident_id };
@@ -1355,16 +1381,30 @@ impl BpmnLiteEngine {
         fields(tenant_id = %self.tenant_id, instance_id = %instance_id, owner)
     )]
     async fn tick_instance_inner(&self, instance_id: Uuid, owner: &str) -> Result<()> {
-        // A single loop iteration's outcome. `Quiescent` and `Stalled` both
+        // A single loop iteration's outcome. `Quiescent` and `Cycled` both
         // end the run (`return Ok(())`) — kept as distinct variants so the
         // "genuinely nothing to do" ending can never be silently reused for
-        // the "a Running fiber produced no change" ending; a future change
-        // to either arm has to name which one it means.
+        // the "the schedulable state repeated" ending; a future change to
+        // either arm has to name which one it means.
         enum TickStep {
             Progressed,
             Quiescent,
-            Stalled,
+            Cycled,
         }
+
+        // Per-run cycle ledger (CA-R1.5b, amended ruling): every distinct
+        // schedulable state this run has reached, keyed by
+        // `PersistedSnapshotState::schedulable_state_hash()` (the Ring 2
+        // hash domain without `revision`/`artifact_hash` — see that
+        // method's own doc comment for why), valued by the revision at
+        // which it was FIRST reached. A zero-progress tick (the previous,
+        // narrower mechanism) is the length-1 case of this: its posterior
+        // state is byte-identical to its own prior state, so it always
+        // collides with an entry this same iteration just seeded. Scoped
+        // to this one `tick_instance_inner` call, not persisted across
+        // separate `run_instance`/`tick_instance` invocations — "per-run,"
+        // per the ruling.
+        let mut seen: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
 
         for _ in 0..MAX_BYTECODE_INSTRUCTIONS {
             let work = self
@@ -1410,6 +1450,18 @@ impl BpmnLiteEngine {
                     .values()
                     .find(|fiber| fiber.wait == WaitState::Running)
                     .cloned();
+                // Captured from `snapshot` before `with_buffered_messages`
+                // reassigns it below — `buffered_messages` isn't part of
+                // `PersistedSnapshotState` (the Ring 2 hash domain), so
+                // this fold is unaffected by that reassignment either way,
+                // but capturing here avoids re-deriving it from a snapshot
+                // that's moved on to represent something else by the time
+                // it would otherwise be needed.
+                let prior_persisted = snapshot.to_persisted_state();
+                let prior_hash = prior_persisted
+                    .schedulable_state_hash()
+                    .map_err(|error| anyhow!(error))?;
+                seen.entry(prior_hash).or_insert(claim.expected_revision());
                 let mut buffered_messages = Vec::new();
                 for fiber in snapshot
                     .fibers()
@@ -1474,50 +1526,72 @@ impl BpmnLiteEngine {
                 );
                 let transition = apply_kernel(&artifact, &snapshot, &command, &context)
                     .map_err(|error| anyhow!(error))?;
-                // A tick that claimed a genuinely Running fiber but produced
-                // neither a fiber upsert/delete nor any other change to the
-                // instance record (completion, termination, a flag/counter
-                // write, ...) leaves the schedulable set exactly as it was —
-                // the next iteration would claim the same fiber and repeat,
-                // up to MAX_BYTECODE_INSTRUCTIONS times, before this loop's
-                // own bound caught it (CA-R1.5b). Detect it on the first
-                // occurrence instead: commit a durable Incident naming the
-                // stuck fiber in place of the no-op transition, and end the
-                // run now rather than re-ticking on no progress.
-                if tick_made_zero_progress(&instance_before, &transition) {
-                    let stalled_fiber = stalled_fiber_before.ok_or_else(|| {
+                let next_revision = claim.expected_revision().saturating_add(1);
+                // Zero progress (the original, narrower CA-R1.5b mechanism)
+                // is the length-1 case of cycle detection: a no-op
+                // transition's posterior schedulable state is, by
+                // definition, byte-identical to the prior state already
+                // hashed and seeded into `seen` above — recomputing it via
+                // a fresh `materialize_snapshot` fold would just re-derive
+                // the same bytes at real cost, so short-circuit instead of
+                // paying that cost every tick.
+                let posterior_hash = if tick_made_zero_progress(&instance_before, &transition) {
+                    prior_hash
+                } else {
+                    let posterior_envelope =
+                        materialize_snapshot(&prior_persisted, &transition, 0, 0);
+                    posterior_envelope
+                        .state()
+                        .schedulable_state_hash()
+                        .map_err(|error| anyhow!(error))?
+                };
+                // A tick whose resulting schedulable state already occurred
+                // earlier in this run — whether that's this same tick
+                // making zero progress, or a longer walk back to a state
+                // several transitions ago — means re-ticking from here can
+                // only retrace the same cycle again, up to
+                // MAX_BYTECODE_INSTRUCTIONS times, before this loop's own
+                // bound caught it (CA-R1.5b). Detect it the moment the
+                // cycle closes instead: commit a durable Incident naming
+                // the repeated state and the two transitions that bracket
+                // the cycle, and end the run now rather than re-ticking
+                // through it again.
+                if let Some(&first_revision) = seen.get(&posterior_hash) {
+                    let cycled_fiber = stalled_fiber_before.ok_or_else(|| {
                         anyhow!(
-                            "instance {instance_id}: zero-progress tick but no \
+                            "instance {instance_id}: cycle detected but no \
                              Running fiber found to name"
                         )
                     })?;
-                    let incident_id = EffectId::for_transition(
-                        instance_id,
-                        claim.expected_revision().saturating_add(1),
-                        1,
-                    )
-                    .as_uuid();
+                    let incident_id =
+                        EffectId::for_transition(instance_id, next_revision, 1).as_uuid();
                     let service_task_id = artifact
                         .envelope()
                         .metadata()
                         .debug_map()
-                        .get(&stalled_fiber.pc)
+                        .get(&cycled_fiber.pc)
                         .cloned()
-                        .unwrap_or_else(|| format!("pc_{}", stalled_fiber.pc));
-                    let stall_transition = stall_transition(
+                        .unwrap_or_else(|| format!("pc_{}", cycled_fiber.pc));
+                    let cycle_transition = cycle_transition(
                         instance_id,
                         instance_before,
-                        stalled_fiber,
+                        cycled_fiber,
                         incident_id,
                         service_task_id,
                         self.logical_time()?,
+                        CycleWitness {
+                            repeated_hash: posterior_hash,
+                            first_revision,
+                            repeat_revision: next_revision,
+                        },
                     );
                     self.store
-                        .commit_transition(&claim, &stall_transition)
+                        .commit_transition(&claim, &cycle_transition)
                         .await
                         .map_err(|error| anyhow!(error))?;
-                    return Ok(TickStep::Stalled);
+                    return Ok(TickStep::Cycled);
                 }
+                seen.insert(posterior_hash, next_revision);
                 self.store
                     .commit_transition(&claim, &transition)
                     .await
@@ -1536,7 +1610,7 @@ impl BpmnLiteEngine {
                     continue;
                 }
                 (Ok(TickStep::Quiescent), Ok(())) => return Ok(()),
-                (Ok(TickStep::Stalled), Ok(())) => return Ok(()),
+                (Ok(TickStep::Cycled), Ok(())) => return Ok(()),
                 (Err(error), _) => return Err(error),
                 (Ok(_), Err(error)) => return Err(error.into()),
             }
