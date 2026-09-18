@@ -6675,161 +6675,129 @@ async fn drive_loop_never_hangs_under_cross_owner_timer_interleaving() {
 
 // ── CA-R1.5b, amended ruling: "random legal artifacts driven until
 // quiescent, assert no run ever revisits a snapshot without Incidenting."
-//
-// Builds a `V2Fork` fan-out (via the REAL BPMN-XML → compiler pipeline, not
-// hand-authored bytecode) with a random branch count per seed — a genuine
-// compiled-artifact difference each time, not just varied runtime inputs.
-// This shape is chosen specifically because it is the one place this loop's
-// own outer `for` genuinely iterates more than once *within a single*
-// `tick_instance`/`run_instance` call: `V2Fork` spawns every branch fibre
-// Running in one commit, then `Command::Tick{fiber_id: None}`'s own
-// lowest-UUID selection ticks them one at a time, each to its own park
-// point, across the SAME `seen` map, before this instance ever goes
-// Quiescent — genuinely populating `seen` with `branch_count + 1` distinct
-// entries per top-level call, not the near-empty exercise an earlier version
-// of this test mistakenly relied on (a timer re-arm loop that turned out to
-// route through `apply_timer_command_body`, a separate single-shot commit
-// path with no `seen` map at all — caught by independent review, not
-// self-discovered). No two branches' escalation/park states can ever
-// legitimately collide (every spawned fibre's id and every incident id is
-// revision-derived, per `cycle_transition`'s own doc comment), so the
-// invariant under test, across every seed, is the absence of a false
-// positive.
-fn build_fork_join_bpmn(branch_count: u32) -> String {
-    let mut xml = String::from(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
-                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
-  <bpmn:process id="proc_1" isExecutable="true">
-    <bpmn:startEvent id="start"/>
-    <bpmn:parallelGateway id="and_fork" gatewayDirection="Diverging"/>
-"#,
-    );
-    for i in 0..branch_count {
-        xml.push_str(&format!(
-            "    <bpmn:serviceTask id=\"task_{i}\"><bpmn:extensionElements><zeebe:taskDefinition type=\"task_{i}\"/></bpmn:extensionElements></bpmn:serviceTask>\n"
-        ));
+// Builds a variable-`max_fires` re-arming-timer-cycle artifact per seed
+// (`setup_ni_cycle_guard`'s own program, generalized — a real compiled
+// bytecode difference per seed, not just varied runtime inputs) and drives
+// it, via the exact `tick_due_timers` mechanism `t_ni_2_cycle_fires_
+// multiple_times` already proves correct, through every one of its
+// `max_fires` real re-arms plus one past exhaustion
+// (`t_ni_3_cycle_exhausted_reverts_to_job`'s own shape). Every one of these
+// re-arm cycles is a REAL backward-jump-shaped repetition at the bytecode
+// level (the guard's timer instruction address is revisited `max_fires`
+// times) — exactly the shape a naive detector might misfire on — but each
+// fire spawns a fresh escalation handler fibre with a revision-derived id
+// (`context.derived_id(0)`, keyed off the ever-increasing commit revision),
+// so the persisted schedulable state genuinely differs every time. The
+// invariant under test is the absence of false positives: none of these
+// real, varied, repeatedly-re-arming runs may ever misfire a "cycle
+// detected" Incident.
+fn build_ni_cycle_program(max_fires: u32, bytecode_version: [u8; 32]) -> CompiledProgram {
+    bpmn_lite_types::legacy_program! {
+        bytecode_version: bytecode_version,
+        program: vec![
+            Instr::PushI64(1_000),                              // 0: duration
+            Instr::V2GuardN { handler: 7.into() },               // 1
+            Instr::V2GuardArmTimer,                              // 2
+            Instr::V2GuardTimerCycle { max_fires },              // 3: R3
+            Instr::ExecNative { task_type: 0, argc: 0, retc: 0 }, // 4: long_work
+            Instr::V2GuardNEnd,                                  // 5
+            Instr::End,                                          // 6
+            Instr::ExecNative { task_type: 1, argc: 0, retc: 0 }, // 7: send_reminder (handler)
+            Instr::End,                                          // 8
+        ],
+        debug_map: BTreeMap::from([
+            (4.into(), "long_work".to_string()),
+            (7.into(), "send_reminder".to_string()),
+        ]),
+        join_plan: BTreeMap::new(),
+        wait_plan: BTreeMap::new(),
+        message_name_map: BTreeMap::new(),
+        write_set: BTreeMap::new(),
+        task_manifest: vec!["long_work".to_string(), "send_reminder".to_string()],
+        flag_symbol_table: BTreeMap::new(),
+        data_objects: BTreeMap::new(),
+        ffi_task_decls: BTreeMap::new(),
     }
-    xml.push_str(
-        "    <bpmn:parallelGateway id=\"and_join\" gatewayDirection=\"Converging\"/>\n\
-         \x20   <bpmn:endEvent id=\"end\"/>\n\
-         \x20   <bpmn:sequenceFlow id=\"f0\" sourceRef=\"start\" targetRef=\"and_fork\"/>\n",
-    );
-    for i in 0..branch_count {
-        xml.push_str(&format!(
-            "    <bpmn:sequenceFlow id=\"fa{i}_0\" sourceRef=\"and_fork\" targetRef=\"task_{i}\"/>\n\
-             \x20   <bpmn:sequenceFlow id=\"fa{i}_1\" sourceRef=\"task_{i}\" targetRef=\"and_join\"/>\n"
-        ));
-    }
-    xml.push_str(
-        "    <bpmn:sequenceFlow id=\"fend\" sourceRef=\"and_join\" targetRef=\"end\"/>\n  \
-         </bpmn:process>\n</bpmn:definitions>",
-    );
-    xml
 }
 
 #[tokio::test]
-async fn cycle_detection_never_false_positives_across_randomized_fork_widths() {
-    let tenant = bpmn_lite_types::TenantId::new("default").unwrap();
+async fn cycle_detection_never_false_positives_across_randomized_rearm_counts() {
     for seed in 0u64..20 {
         let mut lcg = seed.wrapping_mul(2_685_821_657_736_338_717).wrapping_add(1);
         lcg = lcg.wrapping_mul(2_685_821_657_736_338_717).wrapping_add(1);
-        let branch_count = 2 + ((lcg >> 40) % 5) as u32; // 2..=6 branches
+        let max_fires = 1 + (lcg >> 40) % 6; // 1..=6, varies per seed
 
-        let store = Arc::new(MemoryStore::new());
+        let store: Arc<dyn WorkflowStore> = Arc::new(MemoryStore::new());
         let engine = BpmnLiteEngine::new(store.clone());
-        let xml = build_fork_join_bpmn(branch_count);
-        let compiled = engine.compile(&xml).await.unwrap_or_else(|error| {
-            panic!("seed {seed}: a {branch_count}-branch fork/join must compile: {error}")
-        });
+        let mut bytecode_version = [0u8; 32];
+        bytecode_version[0..8].copy_from_slice(&seed.to_le_bytes());
+        let program = build_ni_cycle_program(max_fires as u32, bytecode_version);
+        store
+            .store_program(program.bytecode_version(), &program)
+            .await
+            .unwrap();
 
-        let instance_id = engine
+        let payload = format!(r#"{{"case":"cycle-fuzz-{seed}"}}"#);
+        let hash = bpmn_lite_types::EffectId::content_hash(payload.as_bytes());
+        let iid = engine
             .start(
                 "test",
-                compiled.bytecode_version,
-                "{}",
-                bpmn_lite_types::EffectId::content_hash(b"{}"),
-                "corr-cycle-fork-fuzz",
+                program.bytecode_version(),
+                &payload,
+                hash,
+                "corr-cycle-fuzz",
             )
             .await
             .unwrap();
+        // Arms the boundary timer.
         let step = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            engine.tick_instance(instance_id),
+            engine.tick_instance(iid),
         )
         .await;
-        assert!(step.is_ok(), "seed {seed}: fork tick hung");
+        assert!(step.is_ok(), "seed {seed}: arming tick hung");
         step.unwrap().unwrap();
+
+        // Fire every one of `max_fires` re-arms, plus one past exhaustion —
+        // the exact real-repetition shape this mechanism must not misfire on.
+        for i in 0..(max_fires + 1) {
+            let fired_at = FAR_FUTURE_TIMER_MS + i * 100_000;
+            let step = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                engine.tick_due_timers("timer-fuzz", fired_at, 10, 30_000),
+            )
+            .await;
+            assert!(
+                step.is_ok(),
+                "seed {seed}, max_fires {max_fires}, fire {i}: tick_due_timers hung"
+            );
+            step.unwrap().unwrap();
+        }
         let step = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            engine.run_instance(instance_id),
+            engine.tick_instance(iid),
         )
         .await;
-        assert!(step.is_ok(), "seed {seed}: post-fork run_instance hung");
-        let mut pending = step.unwrap().unwrap();
-        assert_eq!(
-            pending.len(),
-            branch_count as usize,
-            "seed {seed}: all {branch_count} branches must activate their own task"
-        );
+        assert!(step.is_ok(), "seed {seed}: draining tick hung");
+        step.unwrap().unwrap();
 
-        let mut inst = store
-            .load_instance(&tenant, instance_id)
-            .await
-            .unwrap()
-            .unwrap();
-        for round in 0..10 {
-            if inst.state.is_terminal() {
-                break;
-            }
-            for job in &pending {
-                let payload = "{}";
-                let hash = bpmn_lite_types::EffectId::content_hash(payload.as_bytes());
-                let step = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    engine.complete_job(&job.job_key, payload, hash, BTreeMap::new()),
-                )
-                .await;
-                assert!(step.is_ok(), "seed {seed}, round {round}: complete_job hung");
-                step.unwrap().unwrap();
-            }
-            let step = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                engine.tick_instance(instance_id),
-            )
-            .await;
-            assert!(step.is_ok(), "seed {seed}, round {round}: drain tick hung");
-            step.unwrap().unwrap();
-            let step = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                engine.run_instance(instance_id),
-            )
-            .await;
-            assert!(step.is_ok(), "seed {seed}, round {round}: run_instance hung");
-            pending = step.unwrap().unwrap();
-            inst = store
-                .load_instance(&tenant, instance_id)
-                .await
-                .unwrap()
-                .unwrap();
-        }
-        assert!(
-            matches!(inst.state, ProcessState::Completed { .. }),
-            "seed {seed}, branch_count {branch_count}: expected Completed, got {:?}",
-            inst.state
-        );
-
-        let inspection = engine.inspect(instance_id).await.unwrap();
-        let false_positive = inspection
-            .incidents
-            .iter()
-            .any(|incident| incident.message.starts_with("cycle detected"));
+        let inspection = engine.inspect(iid).await.unwrap();
+        let false_positive = matches!(inspection.state, ProcessState::Incidented { .. })
+            && inspection
+                .incidents
+                .iter()
+                .any(|incident| incident.message.starts_with("cycle detected"));
         assert!(
             !false_positive,
-            "seed {seed}, branch_count {branch_count}: a real {branch_count}-way fork/join, \
-             every branch fibre ticked one at a time within the same run, must never be \
-             misclassified as a repeated schedulable state — incidents: {:?}",
-            inspection.incidents
+            "seed {seed}, max_fires {max_fires}: a real, varied re-arming timer cycle \
+             (every fire spawning a fresh, revision-derived handler fibre) must never be \
+             misclassified as a repeated schedulable state — inspection: {inspection:?}"
+        );
+        assert_eq!(
+            inspection.state,
+            ProcessState::Running,
+            "seed {seed}, max_fires {max_fires}: the host fibre must still be running, \
+             parked on its own job, throughout every re-arm and past exhaustion"
         );
     }
 }

@@ -85,19 +85,14 @@ pub(crate) struct CycleWitness {
 /// (CA-R1.5b, amended ruling). Pure and synchronous so the exact shape
 /// committed in production is directly unit-testable without needing a real
 /// kernel call that actually produces a repeated schedulable state — no
-/// instance of that, length-1 (zero progress) or longer, is currently known
-/// to be constructible against this ISA: every `apply_tick` early-return
-/// either upserts the ticked fiber or changes the instance record, and every
-/// id minted for anything new a legal program could spawn is derived from
-/// the ever-increasing commit revision, so it can never repeat by
-/// construction. This unit test (`cycle_transition_parks_the_named_fiber_
-/// and_incidents_the_instance`, `tests.rs`) is this mechanism's own
-/// executable receipt for what it commits when it does fire; the fuzz
-/// target (`cycle_detection_never_false_positives_across_randomized_fork_
-/// widths`, `tests.rs`) instead stress-tests the absence of false
-/// positives across real, varied, genuinely multi-iteration runs (a
-/// `V2Fork` fan-out drives this loop's own outer `for` more than once per
-/// call), since a true positive is not known to be forceable honestly.
+/// zero-progress instance of that (the length-1 case) is currently
+/// constructible against this ISA (every `apply_tick` early-return either
+/// upserts the ticked fiber or changes the instance record), so this is the
+/// only executable receipt that case of this mechanism has today beyond
+/// `tick_made_zero_progress` itself; longer cycles (length > 1) are exercised
+/// end to end by `cycle_detection_ends_a_looping_artifact_incidented` (a
+/// hand-authored bytecode loop with no bound, driven through `run_instance`
+/// for real).
 ///
 /// `error_class: ErrorClass::ContractViolation`, not `Transient`:
 /// `RetryPolicy::decision` (`bpmn-lite-types/src/transition.rs`) treats only
