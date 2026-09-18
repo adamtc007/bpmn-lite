@@ -56,16 +56,20 @@ pub(crate) fn tick_made_zero_progress(
     if transition.state_override().is_some() {
         return false;
     }
-    let instance_unchanged = match (
+    // Cheap checks first: on every real (progress-making) tick, at least one
+    // of these is non-empty, so the O(instance size) serde_json comparison
+    // below never runs on the hot path — it's reached only on the already-
+    // suspicious case where neither fiber list changed at all.
+    if !transition.fibers_upsert().is_empty() || !transition.fibers_delete().is_empty() {
+        return false;
+    }
+    match (
         serde_json::to_vec(instance_before),
         serde_json::to_vec(transition.next_snapshot()),
     ) {
         (Ok(before), Ok(after)) => before == after,
         _ => false,
-    };
-    instance_unchanged
-        && transition.fibers_upsert().is_empty()
-        && transition.fibers_delete().is_empty()
+    }
 }
 
 /// Builds the durable park-as-incident `Transition` `tick_instance_inner`
