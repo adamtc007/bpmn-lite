@@ -1241,29 +1241,6 @@ impl Snapshot {
     pub fn fibers(&self) -> &BTreeMap<Uuid, Fiber> {
         &self.fibers
     }
-    /// The reverse of `PersistedSnapshotState::to_runtime_snapshot` —
-    /// folds this runtime snapshot's own `join_counts`/`incidents` (not
-    /// otherwise exposed as whole maps; only single-key `join_count`/
-    /// `incident` lookups are public) alongside its already-public
-    /// `fibers`/`concurrency_table`/`pending_effects` into the durable,
-    /// revision-free form. `dedupe` and `buffered_messages` are
-    /// deliberately dropped — neither is part of `PersistedSnapshotState`
-    /// (the D3 Ring 2 hash domain), both being transient/per-call state.
-    /// `PersistedSnapshotState::new` clears `integrity_hash` on the cloned
-    /// instance (it is derived from state, not part of it) — same
-    /// normalization the store layer already applies when building one of
-    /// these directly, so two runtime snapshots that differ only in that
-    /// field still fold to the identical persisted form here.
-    pub fn to_persisted_state(&self) -> crate::persistence::PersistedSnapshotState {
-        crate::persistence::PersistedSnapshotState::new(
-            self.instance.clone(),
-            self.fibers.values().cloned(),
-            self.join_counts.clone(),
-            self.incidents.values().cloned(),
-            self.concurrency_table.clone(),
-            self.pending_effects.iter().copied(),
-        )
-    }
     pub fn fiber(&self, fiber_id: Uuid) -> Option<&Fiber> {
         self.fibers.get(&fiber_id)
     }
