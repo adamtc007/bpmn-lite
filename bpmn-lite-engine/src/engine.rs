@@ -102,7 +102,7 @@ pub(crate) fn stall_transition(
         incident_id,
         process_instance_id: instance_id,
         fiber_id: stalled_fiber.fiber_id,
-        service_task_id,
+        service_task_id: service_task_id.clone(),
         bytecode_addr: stalled_fiber.pc,
         error_class: ErrorClass::ContractViolation,
         message: format!(
@@ -123,6 +123,11 @@ pub(crate) fn stall_transition(
     TransitionBuilder::new(next_instance)
         .upsert_fiber(parked_fiber)
         .incident(incident)
+        .event(RuntimeEvent::IncidentCreated {
+            incident_id,
+            service_task_id,
+            job_key: None,
+        })
         .build()
 }
 

@@ -6445,6 +6445,16 @@ async fn stall_transition_parks_the_named_fiber_and_incidents_the_instance() {
     );
     assert!(incident.message.contains(&fiber_id.to_string()));
     assert!(incident.resolved_at.is_none());
+    assert!(
+        transition.events().iter().any(|event| matches!(
+            event,
+            RuntimeEvent::IncidentCreated { incident_id: id, .. } if *id == incident_id
+        )),
+        "a stall incident must emit RuntimeEvent::IncidentCreated like every \
+         other incident-creating path (fail_contract, ...) — otherwise it's \
+         invisible to any live/replayed event stream even though the \
+         incident row itself is persisted"
+    );
 }
 
 // A liveness soak over the engine + MemoryStore drive loop under adversarial
